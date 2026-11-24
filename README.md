@@ -1,6 +1,6 @@
 # 整體物臨時通行證知識庫
 
-版本：0.1.3（2026-11-24，補入授權路線函附件與國道路段、應備文件、外部檢索清單）
+版本：0.1.4（2026-11-24，補入 108 年逕予核發規定、承辦實務、長期追蹤來源）
 
 整理臺灣貨車、曳引車、半聯結車裝載整體物的申請、裝載圖、尺度與重量檢核、路線審查及行政爭議，供承辦人及 AI 查詢。
 
@@ -10,6 +10,7 @@
 - [申請及 B1 操作](knowledge/application.md)
 - [裝載圖及重量檢核](knowledge/loading.md)
 - [道路及橋梁審查](knowledge/routes.md)
+- [承辦實務（去識別化）](knowledge/practice.md)
 - [法院與訴願案例](cases/README.md)
 - [來源索引](sources/index.md)
 - [三模型研究進度](research/backlog.md)
