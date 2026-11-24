@@ -1,0 +1,7 @@
+# Keep operational and personal data out of the public repository
+private/
+raw-permits/
+.env
+.env.*
+*.key
+*.pem

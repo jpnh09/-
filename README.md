@@ -1,2 +1,20 @@
-# -
-transport-permit-knowledge
+# 整體物臨時通行證知識庫
+
+版本：0.1.0（2026-11-24，初始化）
+
+整理臺灣貨車、曳引車、半聯結車裝載整體物的申請、裝載圖、尺度與重量檢核、路線審查及行政爭議，供承辦人及 AI 查詢。
+
+## 入口
+
+- [AI 協作規則](AGENTS.md)
+- [申請及 B1 操作](knowledge/application.md)
+- [裝載圖及重量檢核](knowledge/loading.md)
+- [道路及橋梁審查](knowledge/routes.md)
+- [法院與訴願案例](cases/README.md)
+- [來源索引](sources/index.md)
+- [三模型研究進度](research/backlog.md)
+- [知識卡模板](templates/knowledge-card.md)
+
+目前為初始研究索引，非經完整查證的現行申辦手冊。不得直接將未核對的數字用於申請或派車。實際通行應依最新主管機關規定、核准證及道路限制判斷。
+
+本庫公開；僅收錄公開知識及可合法分享的內容，不提交實際車牌、個資、完整核准證、公司內部資訊、非公開路線、帳密或未取得散布權限的原檔。
