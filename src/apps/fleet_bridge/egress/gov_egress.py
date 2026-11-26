@@ -59,6 +59,9 @@ ROUTES = {
             ("GET", re.compile(r"/api/basic/v1/Traffic/RoadEvent/(?:"
                                r"LiveEvent/(?:Freeway|Highway|City/(?:" + "|".join(TDX_LIVE_CITIES) + r"))"
                                r"|Event/(?:Highway|City/(?:" + "|".join(TDX_PREVIEW_CITIES) + r")))")),
+            # Freeway main-line lane counts (VD static data) for the tractor-trailer lane rule; owner-approved
+            # 2026-11-26. Only the full freeway list, refreshed monthly.
+            ("GET", re.compile(r"/api/basic/v2/Road/Traffic/VD/Freeway")),
         ),
         "query_keys": frozenset({"$format", "$top", "$skip", "$count", "$select", "$filter", "$orderby"}),
         "post_content_type": "application/x-www-form-urlencoded",

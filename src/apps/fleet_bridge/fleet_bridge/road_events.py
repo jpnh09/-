@@ -33,7 +33,13 @@ STALE_QUEUED_MINUTES = 60  # queued longer than this → failed
 STALE_RUNNING_MINUTES = 45  # job timeout is 30 min
 REQUEUE_AFTER_MINUTES = 2   # a queued run whose enqueue was lost gets enqueued again
 BASELINE_KEY = "fleet_road_baseline:"
-LIST_KEYS = ("LiveEvents", "Events", "Items")
+LIST_KEYS = ("LiveEvents", "Events", "VDs", "Items")
+LANE_TABLE = "Fleet Road Lane Table"
+LANE_PATH = "/api/basic/v2/Road/Traffic/VD/Freeway"
+LANE_REFRESH_DAYS = 30
+RULE_KEY = "fleet_road_rule_version"
+RULE_VERSION = "truck-lanes-1"   # changing the alert rules makes the next run a silent baseline
+MAX_CAUTION_LINES = 8
 # Within one worker job, consecutive cache reads did not see values written moments earlier (live run
 # 2026-11-26: token fetched per call, calls 2 s apart), while reads across jobs did. Keep the token and the
 # last call time in this process first; Redis only shares them between jobs and workers.
@@ -134,6 +140,30 @@ def install():
                 _field("missing_since", "未再出現起", "Datetime"),
                 _field("raw_json", "官方原始資料", "Code", options="JSON")],
             permissions=read_only())).insert()
+    _ensure_fields(EVENT, [
+        _field("truck_impact", "曳引車影響", "Select", options="\n" + "\n".join(core.TRUCK_IMPACTS),
+               in_list_view=1, in_standard_filter=1),
+        _field("truck_impact_reason", "曳引車判定依據", "Data", length=255),
+        _field("is_caution", "通過時注意", "Check", in_standard_filter=1),
+        _field("lane_count", "本路段車道數（偵測器）", "Int"),
+        _field("blocked_lanes_label", "阻斷車道（說明）", "Data", length=255),
+        _field("structural_major", "官方重大管制", "Check"),
+        _field("road_key", "道路（比對用）", "Data", length=140, hidden=1),
+        _field("direction_code", "方向代碼", "Data", hidden=1),
+        _field("km_start", "起點里程", "Float", hidden=1),
+        _field("km_end", "迄點里程", "Float", hidden=1),
+        _field("caution_fingerprint", "注意指紋", "Data", hidden=1),
+        _field("notified_caution_fingerprint", "已通知注意指紋", "Data", hidden=1)])
+    if not frappe.db.exists("DocType", LANE_TABLE):
+        frappe.get_doc(dict(doctype="DocType", name=LANE_TABLE, module="Fleet Bridge", custom=1,
+            autoname="field:table_key", track_changes=0, fields=[
+                _field("table_key", "資料表", "Data", reqd=1, unique=1, in_list_view=1),
+                _field("refreshed_at", "更新時間", "Datetime", in_list_view=1),
+                _field("src_update_time", "來源更新時間", "Datetime"),
+                _field("vd_count", "偵測器數", "Int", in_list_view=1),
+                _field("point_count", "主線車道數點位", "Int"),
+                _field("index_json", "車道數對照（主線偵測器）", "Code", options="JSON")],
+            permissions=read_only())).insert()
     if not frappe.db.exists("DocType", RUN):
         frappe.get_doc(dict(doctype="DocType", name=RUN, module="Fleet Bridge", custom=1,
             autoname="RS-.YYYY.-.#####", track_changes=0, sort_field="creation", fields=[
@@ -196,6 +226,19 @@ def install():
     from frappe.core.doctype.scheduled_job_type.scheduled_job_type import sync_jobs
     sync_jobs()
     frappe.db.commit()
+
+
+def _ensure_fields(doctype, fields):
+    """Add fields to an existing custom DocType (idempotent)."""
+    if not frappe.db.exists("DocType", doctype):
+        return
+    doc = frappe.get_doc("DocType", doctype)
+    have = {f.fieldname for f in doc.fields}
+    missing = [f for f in fields if f["fieldname"] not in have]
+    for field in missing:
+        doc.append("fields", field)
+    if missing:
+        doc.save()
 
 
 def validate_settings(doc, method=None):
@@ -390,6 +433,12 @@ def _get(path, params):
 def _fetch(feed):
     """Whole snapshot of one feed. Completeness is judged later, once items are normalised (_apply)."""
     path, label, _kind = core.feed_spec(feed)
+    items, meta = _fetch_path(path, label)
+    meta["feed"] = feed
+    return items, meta
+
+
+def _fetch_path(path, label):
     items, count, pages, meta, exhausted, update_times = [], None, 0, {}, False, set()
     while True:
         response = _get(path, {"$format": "JSON", "$top": str(PAGE_SIZE), "$skip": str(len(items)), "$count": "true"})
@@ -421,9 +470,41 @@ def _fetch(feed):
         if pages >= MAX_PAGES:
             exhausted = True
             break
-    return items, {"feed": feed, "label": label, "count": None if count == -1 else count, "fetched": len(items),
+    return items, {"label": label, "count": None if count == -1 else count, "fetched": len(items),
                    "pages": pages, "pages_exhausted": exhausted,
                    "pages_consistent": len(update_times) == 1 and count != -1, **meta}
+
+
+# ---------------------------------------------------------------- lane counts (曳引車判定)
+
+def _lane_index():
+    """Main-line lane counts per road/direction/mileage. Refreshed from TDX VD every LANE_REFRESH_DAYS;
+    an older table keeps being used if a refresh fails; with no table every lane-based judgement is 狀態不明."""
+    import json
+    row = frappe.db.get_value(LANE_TABLE, "freeway", ["index_json", "refreshed_at"], as_dict=True) \
+        if frappe.db.exists("DocType", LANE_TABLE) else None
+    fresh = row and row.refreshed_at and get_datetime(row.refreshed_at) > _now() - timedelta(days=LANE_REFRESH_DAYS)
+    if fresh:
+        return json.loads(row.index_json or "{}"), None
+    try:
+        items, meta = _fetch_path(LANE_PATH, "國道車道數")
+        index = core.lane_index_from_vds(items)
+        if meta["count"] is None or meta["count"] != meta["fetched"] or not index:
+            raise SyncError("國道車道數回應不完整。")
+        values = {"table_key": "freeway", "refreshed_at": _now_str(), "src_update_time": meta.get("src_update_time"),
+                  "vd_count": meta["fetched"], "point_count": sum(len(v) for v in index.values()),
+                  "index_json": json.dumps(index, ensure_ascii=False, separators=(",", ":"))}
+        if row:
+            frappe.db.set_value(LANE_TABLE, "freeway", values)
+        else:
+            frappe.get_doc(dict(doctype=LANE_TABLE, **values)).insert(ignore_permissions=True)
+        frappe.db.commit()
+        return index, None
+    except SyncError as error:
+        frappe.db.rollback()
+        if row and row.index_json:
+            return json.loads(row.index_json), f"國道車道數更新失敗，沿用 {row.refreshed_at} 的資料：{error}"
+        return {}, f"國道車道數無法取得，車道相關判定一律為狀態不明：{error}"
 
 
 # ---------------------------------------------------------------- applying a response
@@ -433,10 +514,19 @@ COPY_FIELDS = ("feed", "feed_label", "kind", "event_id", "title", "description",
                "location_type", "location_text", "road", "direction", "severity", "severity_label", "regulations",
                "regulation_labels", "block_way", "block_way_label", "blocked_lanes", "impact_description",
                "detour_description", "duration_text", "special_vehicle_control", "is_major", "reporting_source",
-               "positions", "web_url", "fingerprint", "major_fingerprint", "raw_json")
+               "positions", "web_url", "fingerprint", "major_fingerprint", "raw_json", "blocked_lanes_label",
+               "road_key", "direction_code", "km_start", "km_end", "structural_major", "truck_impact",
+               "truck_impact_reason", "lane_count", "is_caution", "caution_fingerprint")
 
 
-def _apply(feed, items, meta, run_name, now_str, baseline):
+def _db_safe(values):
+    """frappe.db.set_value writes raw SQL: Int/Float/Check columns are NOT NULL, so None must become 0
+    (the same value Document.insert/save stores for them). Provincial events have no Impact codes at all."""
+    numeric = {f.fieldname for f in frappe.get_meta(EVENT).fields if f.fieldtype in ("Int", "Float", "Check")}
+    return {k: (0 if v is None and k in numeric else v) for k, v in values.items()}
+
+
+def _apply(feed, items, meta, run_name, now_str, baseline, lane_index=None):
     """Write one feed's snapshot. Missing events change state only when the snapshot is provably complete.
 
     On a baseline (first complete snapshot of a feed) major events are recorded as already notified,
@@ -445,7 +535,7 @@ def _apply(feed, items, meta, run_name, now_str, baseline):
     records, invalid = {}, 0
     for item in items:
         try:
-            record = core.normalize(feed, item)
+            record = core.apply_truck_impact(core.normalize(feed, item), lane_index or {})
         except ValueError:
             invalid += 1
             continue
@@ -465,6 +555,10 @@ def _apply(feed, items, meta, run_name, now_str, baseline):
             values["notified_major_fingerprint"] = None  # a later return to major alerts again
         elif baseline:
             values["notified_major_fingerprint"] = record["major_fingerprint"]
+        if not record["is_caution"]:
+            values["notified_caution_fingerprint"] = None
+        elif baseline:
+            values["notified_caution_fingerprint"] = record["caution_fingerprint"]
         if changed:
             values.update(last_change_at=now_str, last_change_run=run_name)
         if previous is None:
@@ -474,7 +568,7 @@ def _apply(feed, items, meta, run_name, now_str, baseline):
             frappe.get_doc(EVENT, previous.name).update(values).save(ignore_permissions=True)
         else:
             # Same content and state: refresh the copied fields (source, links, raw data) without a "change".
-            frappe.db.set_value(EVENT, previous.name, values, update_modified=False)
+            frappe.db.set_value(EVENT, previous.name, _db_safe(values), update_modified=False)
         if changed:
             stats[{"新增": "new", "變更": "changed", "已結束": "ended"}.get(status, "changed")] += 1
     for key, previous in existing.items():
@@ -514,6 +608,22 @@ def repair_null_expiry():
     frappe.db.commit()
     print(f"repaired {len(rows)} events")
     return len(rows)
+
+
+def _pending_caution():
+    return [r[0] for r in frappe.db.sql(f"""SELECT name FROM `tab{EVENT}`
+        WHERE status IN %(active)s AND is_caution=1
+          AND (notified_caution_fingerprint IS NULL OR notified_caution_fingerprint != caution_fingerprint)
+        ORDER BY road_key, direction_code, km_start, name""", {"active": core.ACTIVE})]
+
+
+def _mark_all_pending_notified():
+    """Rule change: record the current state as known without alerting (same idea as the first baseline)."""
+    frappe.db.sql(f"""UPDATE `tab{EVENT}` SET notified_major_fingerprint=major_fingerprint
+        WHERE status IN %(active)s AND is_major=1""", {"active": core.ACTIVE})
+    frappe.db.sql(f"""UPDATE `tab{EVENT}` SET notified_caution_fingerprint=caution_fingerprint
+        WHERE status IN %(active)s AND is_caution=1""", {"active": core.ACTIVE})
+    frappe.db.commit()
 
 
 def _pending_major():
@@ -557,6 +667,8 @@ def _notify_major(names, run_name):
     for name in shown:
         event = frappe.get_doc(EVENT, name)
         control = event.regulation_labels or event.severity_label or event.event_type_label
+        if event.truck_impact == "等同封閉" and not event.structural_major:
+            control = f"曳引車等同封閉（{event.blocked_lanes_label or event.truck_impact_reason}）"
         title = escape_html(f"道路管制：{event.road or event.feed_label}｜{control}"[:120])
         description = escape_html(f"{event.event_type_label}｜{event.location_text or '位置未提供'}｜{event.title}。"
                                   f"來源最後更新（台北）：{event.source_update_time or '未提供'}。資料來源：交通部 TDX。"
@@ -577,6 +689,30 @@ def _notify_major(names, run_name):
                                 update_modified=False)
     frappe.db.commit()
     return len(names)
+
+
+def _notify_caution(names, run_name):
+    """One combined 「通過時注意」 alert per run (outer-shoulder work is common; one alert per event would flood)."""
+    from fleet_bridge.notification_dispatch import recipients
+    from frappe.utils import escape_html
+    users = recipients()
+    if not users or not names:
+        return 0
+    events = frappe.get_all(EVENT, filters={"name": ["in", names]},
+        fields=["name", "event_key", "caution_fingerprint", "road", "direction", "location_text", "blocked_lanes_label"],
+        order_by="road_key asc, direction_code asc, km_start asc")
+    lines = [f"{e.location_text or e.road}（{e.blocked_lanes_label or '外側路肩'}）" for e in events[:MAX_CAUTION_LINES]]
+    if len(events) > MAX_CAUTION_LINES:
+        lines.append(f"另有 {len(events) - MAX_CAUTION_LINES} 處，請到車隊首頁「道路情報」查看。")
+    key = hashlib.sha256("\0".join(sorted(f"{e.event_key}\0{e.caution_fingerprint}" for e in events)).encode("utf-8")).hexdigest()
+    title = f"道路注意：{len(events)} 處外側路肩施工（曳引車通過時注意）"
+    description = escape_html("；".join(lines) + "。車道未封，不需改道；行經時請注意。資料來源：交通部 TDX。")
+    for user in users:
+        _dispatch("通過時注意", key, user, title, description, sync_run=run_name)
+    for e in events:
+        frappe.db.set_value(EVENT, e.name, "notified_caution_fingerprint", e.caution_fingerprint, update_modified=False)
+    frappe.db.commit()
+    return len(events)
 
 
 def _notify_failure_streak(run):
@@ -664,6 +800,9 @@ def run_sync(run_name):
             return
         now_str = _now_str()
         results, totals, errors, failed = [], Counter(), [], set()
+        lane_index, lane_note = _lane_index()
+        if lane_note:
+            errors.append(lane_note)
         for index, feed in enumerate(feeds):
             label = core.feed_spec(feed)[1]
             if index and usage_summary(settings)["exceeded"]:
@@ -675,7 +814,7 @@ def run_sync(run_name):
             try:
                 items, meta = _fetch(feed)
                 baseline = not frappe.db.get_global(BASELINE_KEY + feed)
-                stats, invalid, complete = _apply(feed, items, meta, run_name, now_str, baseline)
+                stats, invalid, complete = _apply(feed, items, meta, run_name, now_str, baseline, lane_index)
                 if complete and baseline:
                     frappe.db.set_global(BASELINE_KEY + feed, now_str)
                 meta.update(ok=True, complete=complete, baseline=baseline and complete, invalid_items=invalid, **stats)
@@ -697,7 +836,15 @@ def run_sync(run_name):
         frappe.db.commit()
         notify_error = None
         try:
-            notified = _notify_major(_pending_major(), run_name)
+            if frappe.db.get_global(RULE_KEY) != RULE_VERSION:
+                _mark_all_pending_notified()  # new alert rules: today's events become the baseline, no flood
+                if lane_index:  # without lane counts the baseline is incomplete; repeat it next run
+                    frappe.db.set_global(RULE_KEY, RULE_VERSION)
+                frappe.db.commit()
+                notified = 0
+            else:
+                notified = _notify_major(_pending_major(), run_name)
+                _notify_caution(_pending_caution(), run_name)
         except Exception:
             # Import outcome stands; unsent alerts stay pending (notified fingerprint not set) for the next run.
             frappe.db.rollback()
@@ -785,7 +932,8 @@ EVENT_FIELDS = ["name", "status", "is_major", "special_vehicle_control", "feed",
                 "title", "description", "road", "direction", "location_text", "effective_time", "expire_time",
                 "source_update_time", "severity_label", "regulation_labels", "block_way_label", "blocked_lanes",
                 "impact_description", "detour_description", "reporting_source", "web_url", "first_seen_at",
-                "last_seen_at", "last_change_at", "last_change_run", "missing_since"]
+                "last_seen_at", "last_change_at", "last_change_run", "missing_since", "truck_impact",
+                "truck_impact_reason", "lane_count", "is_caution", "blocked_lanes_label"]
 
 
 def _plain(rows):
@@ -851,6 +999,8 @@ def road_overview():
             "latest_run": _plain([latest])[0] if latest else None,
             "runs": _plain(runs), "active": _plain(active), "unknown": _plain(unknown), "ended": _plain(ended),
             "major_rule": core.MAJOR_RULE, "notice": NOTICE, "as_of": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "lane_table": _plain([frappe.db.get_value(LANE_TABLE, "freeway", ["refreshed_at", "vd_count", "point_count"],
+                                                      as_dict=True) or {}])[0] if frappe.db.exists("DocType", LANE_TABLE) else {},
             "cooldown_minutes": settings.manual_cooldown_minutes or 15}
 
 

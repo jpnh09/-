@@ -162,5 +162,85 @@ class ScheduleTests(unittest.TestCase):
         self.assertAlmostEqual(core.estimated_points(750, 75_000_000), 1.0)
 
 
+VDS = [  # main-line detectors (M/N) and ramp detectors (I/O) as in the live freeway VD list
+    {"VDID": "VD-N3-S-368.900-M-RS", "RoadName": "國道3號", "LocationMile": "368K+900",
+     "DetectionLinks": [{"ActualLaneNum": 3, "RoadDirection": "S"}]},
+    {"VDID": "VD-N3-S-370.000-N-RS", "RoadName": "國道3號", "LocationMile": "370K+000",
+     "DetectionLinks": [{"ActualLaneNum": 4, "RoadDirection": "S"}]},
+    {"VDID": "VD-N3-S-369.300-I-ES-1", "RoadName": "國道3號", "LocationMile": "369K+300",
+     "DetectionLinks": [{"ActualLaneNum": 1, "RoadDirection": "S"}]},
+    {"VDID": "VD-N6-W-21.000-M-RS", "RoadName": "國道6號", "LocationMile": "21K+000",
+     "DetectionLinks": [{"ActualLaneNum": 2, "RoadDirection": "W"}]},
+]
+
+
+def lane_event(blocked, road="國道三號", direction="南向", km="369K+300", location_type=0, **impact):
+    return item(Location={"FreeExpressHighway": [{"Road": road, "Direction": direction, "StartKM": km, "EndKM": km}]},
+                LocationType=location_type, Impact={"Severity": 1, "Regulations": [2], "BlockWay": 1,
+                                                    "BlockedLanes": blocked, **impact})
+
+
+class TruckLaneTests(unittest.TestCase):
+    INDEX = core.lane_index_from_vds(VDS)
+
+    def judge(self, blocked, **kw):
+        r = core.apply_truck_impact(core.normalize("freeway_live", lane_event(blocked, **kw)), self.INDEX)
+        return r["truck_impact"], r["lane_count"], r
+
+    def test_names_and_mileage(self):
+        self.assertEqual(core.road_key("國道三號"), "國道3號")
+        self.assertEqual(core.road_key("國道十號"), "國道10號")
+        self.assertEqual(core.road_key("國道三甲"), "國道3甲")
+        self.assertEqual(core.road_key("臺十五"), "台15")
+        self.assertEqual(core.parse_km("243K+800"), 243.8)
+        self.assertEqual(core.parse_km("12.0K"), 12.0)
+        self.assertIsNone(core.parse_km("abc"))
+
+    def test_index_uses_main_line_only_and_minimum(self):
+        self.assertEqual(sorted(self.INDEX), ["國道3號|S", "國道6號|W"])
+        self.assertEqual(core.lanes_near(self.INDEX, "國道3號", "S", 369.3, 369.3), 3)  # 3 and 4 nearby -> 3
+        self.assertIsNone(core.lanes_near(self.INDEX, "國道3號", "S", 100.0, 100.0))
+        self.assertIsNone(core.lanes_near({}, "國道3號", "S", 369.3, 369.3))
+
+    def test_owner_rule(self):
+        self.assertEqual(self.judge("2")[0], "等同封閉")          # outer-most lane of 3
+        self.assertEqual(self.judge("1,RS", road="國道六號", direction="西向", km="21K+000")[0], "等同封閉")
+        self.assertEqual(self.judge("999")[0], "等同封閉")
+        self.assertEqual(self.judge("RS")[0], "通過時注意")       # outer shoulder only
+        self.assertEqual(self.judge("0,RS")[0], "通過時注意")     # inner lane + outer shoulder, outer lane open
+        self.assertEqual(self.judge("0,LS")[0], "無影響")
+        self.assertEqual(self.judge("LS")[0], "無影響")
+        self.assertEqual(self.judge("1")[0], "無影響")            # middle lane of 3
+        self.assertEqual(self.judge("-1")[0], "無阻斷")
+        self.assertEqual(self.judge("255")[0], "狀態不明")
+        self.assertEqual(self.judge("2,3")[0], "等同封閉")        # lane number beyond the detector count
+
+    def test_never_guess(self):
+        self.assertEqual(self.judge("1", km="100K+000")[0], "狀態不明")        # no detector nearby
+        self.assertEqual(self.judge("0", location_type=2)[0], "狀態不明")      # ramp junction lane numbering
+        self.assertEqual(self.judge("x,y")[0], "狀態不明")
+        empty = core.apply_truck_impact(core.normalize("highway_live", item(Impact=None)), self.INDEX)
+        self.assertEqual(empty["truck_impact"], "未提供車道資訊")
+        self.assertEqual((empty["is_major"], empty["is_caution"]), (0, 0))
+
+    def test_alert_flags_and_fingerprints(self):
+        closed, _, r = self.judge("2")
+        self.assertEqual((r["is_major"], r["is_caution"]), (1, 0))
+        _, _, caution = self.judge("RS")
+        self.assertEqual((caution["is_major"], caution["is_caution"]), (0, 1))
+        self.assertTrue(caution["caution_fingerprint"])
+        self.assertTrue(core.needs_caution_notice("新增", 1, caution["caution_fingerprint"], None))
+        self.assertFalse(core.needs_caution_notice("持續", 1, caution["caution_fingerprint"], caution["caution_fingerprint"]))
+        structural = core.apply_truck_impact(core.normalize("freeway_live", lane_event("0", Regulations=[1])), self.INDEX)
+        self.assertEqual((structural["truck_impact"], structural["is_major"]), ("等同封閉", 1))
+
+    def test_labels(self):
+        self.assertEqual(core.blocked_lanes_label("2", 3), "第3車道（最外側）｜本路段 3 車道")
+        self.assertEqual(core.blocked_lanes_label("0,LS", 3), "內側路肩、第1車道（最內側）｜本路段 3 車道")
+        self.assertEqual(core.blocked_lanes_label("RS"), "外側路肩")
+        self.assertEqual(core.blocked_lanes_label("-1"), "無阻斷車道")
+        self.assertIn("不一致", core.blocked_lanes_label("2,3", 3))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
