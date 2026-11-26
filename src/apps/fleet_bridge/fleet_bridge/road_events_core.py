@@ -39,8 +39,12 @@ ACTIVE = ("新增", "持續", "變更")
 STATUSES = ACTIVE + ("已結束", "狀態不明")
 # Measured on the live API (2026-11-26): every ordinary freeway lane closure carries 部分阻斷 + 部分封閉 + 單向阻斷,
 # and provincial-highway events carry no Impact codes at all, so BlockWay cannot mark a major event.
-MAJOR_RULE = "全封閉、特定車種管制需求、完全阻斷，或事件類型為災害"
+MAJOR_RULE = ("曳引車等同封閉：官方全封閉、特定車種管制需求、完全阻斷、災害，或國道封到最外側車道／全部車道；"
+              "只封外側路肩為「通過時注意」；只封內側車道或內側路肩不影響")
 DEFAULT_SCHEDULE = "05:30,11:30,17:30,22:30"
+DEFAULT_HIGHWAY_TIMES = "05:30,19:30"   # provincial feeds: twice a day (owner, 2026-11-26)
+DEFAULT_CITY_DAYS = "一,三,五"      # city feeds: Mon/Wed/Fri only, not at the weekend (owner, 2026-11-26)
+DEFAULT_CITY_TIMES = "05:30"        # one morning run on those days, before the trucks leave
 CALL_POINTS, MB_POINTS = 1500, 150  # 基礎服務：1,500 次 = 1 點，150 MB = 1 點，合併計算
 
 
@@ -199,10 +203,15 @@ def normalize(feed, item):
         "regulation_labels": "、".join(REGULATIONS.get(r, str(r)) for r in regulations),
         "block_way": block_way, "block_way_label": BLOCK_WAY.get(block_way, "未提供"),
         "blocked_lanes": _str(impact.get("BlockedLanes"), 140),
+        "blocked_lanes_label": blocked_lanes_label(_str(impact.get("BlockedLanes"))),
+        "road_key": road_key(road), "direction_code": DIRECTION_CODES.get(direction, ""),
+        "km_start": _first_km(item.get("Location"), "StartKM"), "km_end": _first_km(item.get("Location"), "EndKM"),
         "impact_description": _str(impact.get("Description")),
         "detour_description": _str(detour.get("Description")),
         "special_vehicle_control": 1 if 9 in regulations else 0,
         "is_major": 1 if is_major(severity, regulations, event_type) else 0,
+        "structural_major": 1 if is_major(severity, regulations, event_type) else 0,
+        "truck_impact": "", "truck_impact_reason": "", "lane_count": None, "is_caution": 0,
         "reporting_source": _str(item.get("Source"), 140),
         "positions": _str(item.get("Positions"), 500),
         "web_url": _str(item.get("WebURL"), 500),
@@ -214,6 +223,7 @@ def normalize(feed, item):
         "location_text", "severity", "regulations", "block_way", "blocked_lanes", "impact_description",
         "detour_description", "duration_text")])
     record["major_fingerprint"] = _digest([record["is_major"], severity, record["regulations"], block_way], 16)
+    record["caution_fingerprint"] = ""
     return record
 
 
@@ -282,6 +292,41 @@ def parse_schedule(text):
     return sorted(times)
 
 
+_WEEKDAY_CHARS = "一二三四五六日"
+_WEEKDAY_NUMBERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6}
+
+
+def parse_weekdays(text):
+    """'一,三,五', '一三五', '週一、週三' or '1,3,5' (Monday = 1) → sorted weekday numbers with Monday = 0.
+    Raises ValueError on anything else or when no day is given."""
+    days = set()
+    for part in (text or "").replace("，", ",").replace("、", ",").replace(" ", ",").split(","):
+        part = part.strip().replace("星期", "").replace("週", "").replace("周", "").replace("天", "日")
+        if not part:
+            continue
+        if part in _WEEKDAY_NUMBERS:
+            days.add(_WEEKDAY_NUMBERS[part])
+        elif all(ch in _WEEKDAY_CHARS for ch in part):
+            days.update(_WEEKDAY_CHARS.index(ch) for ch in part)
+        else:
+            raise ValueError(f"看不懂的星期：{part}（例如 一,三,五）")
+    if not days:
+        raise ValueError("縣市事件至少要選一天更新。")
+    return sorted(days)
+
+
+def weekdays_text(days):
+    return ",".join(_WEEKDAY_CHARS[d] for d in days)
+
+
+def city_feeds_due(when, days, times, scheduled):
+    """City feeds run only on the chosen weekdays. A scheduled run must also be one of the chosen times (its slot
+    time, so a late catch-up run still counts); a manual refresh on those days includes them at any time."""
+    if when.weekday() not in days:
+        return False
+    return not scheduled or (when.hour, when.minute) in times
+
+
 def due_slot(now, times, catch_up_minutes=180):
     """Latest scheduled time ≤ now within the catch-up window, else None. now is naive Taipei time."""
     candidates = []
@@ -314,3 +359,273 @@ def previous_slot(now, times):
 def estimated_points(calls, wire_bytes):
     """Conservative estimate (150 MB taken as 150×10^6 bytes). The TDX member console is authoritative."""
     return calls / CALL_POINTS + wire_bytes / (MB_POINTS * 1_000_000)
+
+
+# ---------------------------------------------------------------- 曳引車車道影響
+# Lane coding (MOTC road-event data, checked against live freeway data 2026-11-26): lanes are numbered from the
+# inner (left) side 0,1,2,...; LS = inner shoulder, RS = outer shoulder; "-1" = no lane blocked (comes with
+# Severity 0); "255" = unknown (comes with Severity 255); "999" = all lanes. Several values are comma-separated.
+# Tractor-trailers may not use the inner freeway lanes, so (owner's rule):
+#   outer-most lane or all lanes blocked, or a structural major event  -> 等同封閉 (alert each)
+#   outer shoulder (RS) only, outer lane open                        -> 通過時注意 (alert, combined per run)
+#   inner lanes / inner shoulder only                                -> 無影響
+#   no lane count for the place, ramps, unknown codes                -> 狀態不明 (never guessed)
+TRUCK_IMPACTS = ("等同封閉", "通過時注意", "無影響", "無阻斷", "狀態不明", "未提供車道資訊")
+DIRECTION_CODES = {"北向": "N", "南向": "S", "東向": "E", "西向": "W"}
+MAINLINE_VD_KINDS = ("M", "N")   # VDID 5th part; I/O/R/A/B/C/L/PS are ramps or other places (mostly 1–2 lanes)
+LANE_WINDOW_KM = 2.0             # VD detectors considered around the event's mileage range
+_CN_DIGITS = {"零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_number(text):
+    """'三' -> 3, '十' -> 10, '十八' -> 18, '二十' -> 20; None if not a Chinese number."""
+    if not text or any(ch not in _CN_DIGITS and ch != "十" for ch in text):
+        return None
+    if "十" not in text:
+        return int("".join(str(_CN_DIGITS[ch]) for ch in text))
+    tens, _, ones = text.partition("十")
+    return (_CN_DIGITS[tens] if tens else 1) * 10 + (_CN_DIGITS[ones] if ones else 0)
+
+
+def road_key(name):
+    """Comparable road name: '國道三號' and '國道3號' -> '國道3號'; '國道三甲' -> '國道3甲'."""
+    name = _str(name).replace(" ", "")
+    match = re.match(r"^(國道|台|臺)([零一二三四五六七八九十]+)(.*)$", name)
+    if match:
+        number = _cn_number(match.group(2))
+        if number is not None:
+            name = f"{match.group(1)}{number}{match.group(3)}"
+    name = name.replace("臺", "台")
+    return name[:-1] if re.fullmatch(r"台\d+[甲乙丙丁戊己庚辛]?線", name) else name
+
+
+def parse_km(value):
+    """'243K+800' -> 243.8, '12.0K' -> 12.0, '96' -> 96.0; None if unreadable."""
+    text = _str(value).upper().replace(" ", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)K?(?:\+(\d+(?:\.\d+)?))?", text)
+    if not match:
+        return None
+    km = float(match.group(1))
+    if match.group(2):
+        km += float(match.group(2)) / 1000
+    return round(km, 3)
+
+
+def _first_km(location, field):
+    location = location if isinstance(location, dict) else {}
+    for seg in _as_list(location.get("FreeExpressHighway")):
+        if isinstance(seg, dict) and seg.get(field) not in (None, ""):
+            return parse_km(seg.get(field))
+    return None
+
+
+def parse_blocked_lanes(text):
+    """-> ('none'|'unknown'|'all'|'lanes', set_of_lane_numbers, has_LS, has_RS)."""
+    raw = _str(text)
+    if raw == "":
+        return "empty", set(), False, False
+    tokens = [t.strip().upper() for t in raw.replace("，", ",").split(",") if t.strip()]
+    if tokens == ["-1"]:
+        return "none", set(), False, False
+    if "999" in tokens:
+        return "all", set(), "LS" in tokens, "RS" in tokens
+    lanes, ls, rs = set(), False, False
+    for token in tokens:
+        if token == "LS":
+            ls = True
+        elif token == "RS":
+            rs = True
+        elif token.isdigit() and int(token) < 255:
+            lanes.add(int(token))
+        else:
+            return "unknown", set(), False, False   # 255, -1 mixed with others, or anything unexpected
+    return "lanes", lanes, ls, rs
+
+
+def blocked_lanes_label(text, lane_count=None):
+    kind, lanes, ls, rs = parse_blocked_lanes(text)
+    if kind == "empty":
+        return ""
+    if kind == "none":
+        return "無阻斷車道"
+    if kind == "unknown":
+        return "阻斷車道不明"
+    parts = ["內側路肩"] if ls else []
+    if kind == "all":
+        parts.append("全部車道")
+    consistent = bool(lane_count) and (not lanes or max(lanes) < lane_count)
+    for lane in sorted(lanes):
+        outer = consistent and lane == lane_count - 1
+        parts.append(f"第{lane + 1}車道" + ("（最外側）" if outer else "（最內側）" if lane == 0 else ""))
+    if rs:
+        parts.append("外側路肩")
+    if lane_count and not consistent:
+        return "、".join(parts) + f"｜偵測器車道數 {lane_count} 與事件不一致"
+    return "、".join(parts) + (f"｜本路段 {lane_count} 車道" if lane_count else "")
+
+
+def lane_index_from_vds(vds):
+    """VD records (TDX v2 JSON) -> {"國道3號|N": [[km, lanes], ...]} using main-line detectors only."""
+    index = {}
+    for vd in vds or []:
+        if not isinstance(vd, dict):
+            continue
+        parts = _str(vd.get("VDID")).split("-")
+        if len(parts) < 5 or parts[4] not in MAINLINE_VD_KINDS:
+            continue
+        km = parse_km(vd.get("LocationMile"))
+        key_road = road_key(vd.get("RoadName"))
+        if km is None or not key_road:
+            continue
+        for link in _as_list(vd.get("DetectionLinks")):
+            if not isinstance(link, dict):
+                continue
+            lanes, direction = _int(link.get("ActualLaneNum")), _str(link.get("RoadDirection")).upper()
+            if lanes and lanes >= 2 and direction in ("N", "S", "E", "W"):
+                index.setdefault(f"{key_road}|{direction}", []).append([km, lanes])
+    for points in index.values():
+        points.sort()
+    return index
+
+
+def lanes_near(index, road, direction, km_start, km_end, window=LANE_WINDOW_KM):
+    """Main-line lanes at the event: the fewest among detectors inside the event's mileage range (errs towards
+    「封到最外側」), otherwise the nearest detector within ± window. None when nothing is near.
+    (Taking the minimum over the whole window picked narrow merge sections and over-flagged closures.)
+    1-lane points are skipped here too: a lane table stored before that fix keeps being used for 30 days."""
+    if not index or not road or not direction or km_start is None:
+        return None
+    lo, hi = sorted((km_start, km_end if km_end is not None else km_start))
+    points = [(km, lanes) for km, lanes in index.get(f"{road}|{direction}", []) if lanes and lanes >= 2]
+    inside = [lanes for km, lanes in points if lo <= km <= hi]
+    if inside:
+        return min(inside)
+    near = sorted((min(abs(km - lo), abs(km - hi)), lanes) for km, lanes in points if lo - window <= km <= hi + window)
+    return near[0][1] if near else None
+
+
+def truck_impact(record, lane_count):
+    """(impact, reason) for a normalised record and the lane count at its place (None if unknown)."""
+    if record.get("structural_major"):
+        return "等同封閉", "官方標示全封閉、特定車種管制、完全阻斷或災害"
+    kind, lanes, _ls, rs = parse_blocked_lanes(record.get("blocked_lanes"))
+    if kind == "empty":
+        return "未提供車道資訊", "來源未提供阻斷車道"
+    if kind == "none":
+        return "無阻斷", "官方標示無阻斷車道"
+    if kind == "unknown":
+        return "狀態不明", "官方阻斷車道為未知或無法辨識"
+    if kind == "all":
+        return "等同封閉", "全部車道受阻"
+    if lanes:
+        if record.get("location_type") not in ("道路主線", ""):
+            return "狀態不明", f"{record.get('location_type')}的車道數無法判斷"
+        if not lane_count:
+            return "狀態不明", "查無此路段車道數"
+        if max(lanes) >= lane_count:
+            return "等同封閉", f"事件車道編號超過偵測器車道數 {lane_count}，保守視為封到外側"
+        if max(lanes) == lane_count - 1:
+            return "等同封閉", f"封到最外側車道（本路段 {lane_count} 車道）"
+        if rs:
+            return "通過時注意", f"外側路肩施工，內側車道封閉（本路段 {lane_count} 車道）"
+        return "無影響", f"只封內側車道（本路段 {lane_count} 車道）"
+    if rs:
+        return "通過時注意", "外側路肩施工，車道未封"
+    return "無影響", "只封內側路肩"
+
+
+def apply_truck_impact(record, lane_index):
+    """Adds truck impact, lane count and label to a normalised record and refreshes the alert fingerprints."""
+    lane_count = lanes_near(lane_index, record.get("road_key"), record.get("direction_code"),
+                            record.get("km_start"), record.get("km_end"))
+    impact, reason = truck_impact(record, lane_count)
+    record.update(truck_impact=impact, truck_impact_reason=reason, lane_count=lane_count,
+                  blocked_lanes_label=blocked_lanes_label(record.get("blocked_lanes"), lane_count),
+                  is_major=1 if record.get("structural_major") or impact == "等同封閉" else 0,
+                  is_caution=1 if impact == "通過時注意" else 0)
+    record["major_fingerprint"] = _digest([record["is_major"], impact, record.get("severity"), record.get("regulations"),
+                                           record.get("block_way"), record.get("blocked_lanes")], 16)
+    record["caution_fingerprint"] = _digest([impact, record.get("blocked_lanes"), record.get("km_start")], 16) \
+        if record["is_caution"] else ""
+    return record
+
+
+def needs_caution_notice(status, is_caution, caution_fingerprint, notified_fingerprint):
+    return status in ACTIVE and bool(is_caution) and caution_fingerprint != notified_fingerprint
+
+
+# ---------------------------------------------------------------- B1 授權路線
+# 「總局授權路線」 of the B1 (整體物臨時通行證) system: 29 provincial routes, each with segments named by places
+# (not mileage). Matching is per route; whether an event lies inside the authorised segment needs a human check.
+DEFAULT_B1_ROUTES = """台1｜新北桃園市界－桃園－新竹－通宵－沙鹿－彰化－新西螺大橋－斗南－嘉義－台南－高雄－屏東－楓港（與台74甲線叉路口人行陸橋限高4.1公尺、禁行）
+台1甲｜新北桃園市界－桃園
+台1丙｜台1線叉路口－台19線叉路口
+台1丁｜莿桐－斗南
+台2｜關渡－萬里、基隆新北市界－瑞濱－蘇澳
+台2庚｜頭城－二城
+台3｜土城（土城交流道）－大溪－竹東－珊珠湖、東勢－台中－南投－斗六－梅山－澐水、玉井－旗山－屏東
+台3乙｜員樹林－深窩
+台4｜竹圍－大坪
+台6｜龍港－苗栗
+台9｜二城－蘇澳、崇德－壽豐、池上－鹿鳴橋、知本－安朔
+台10｜西勢寮－豐原
+台13｜內湖－頭份－台10線叉路口－台3線叉路口（豐原市區）
+台14｜中庄子－草屯－埔里
+台15｜龍形－竹圍－新竹
+台16｜名間－水里
+台17｜甲南－王功－橋頭－布袋－七股－台南－高雄－水底寮
+台18｜太保－觸口橋頭
+台19｜溪湖－竹塘、自強大橋－朴子－台南
+台19甲｜鹽水－關廟
+台20｜台南－北寮
+台29｜旗山－磚子窯
+台22｜高雄－高樹
+台24｜屏東－水門
+台26｜楓港－鵝鑾鼻
+台27｜舊寮－烏龍
+台31｜台4線叉路口－台66線叉路口
+台37｜新港－太保
+台39｜新化－阿蓮"""
+_ROUTE_CODE = re.compile(r"台\d+[甲乙丙丁戊己庚辛]?")
+
+
+def parse_permit_routes(text):
+    """Lines like '台3｜土城－大溪…' or '七、台3線：土城－【台3】－…' -> {code: segment text}.
+    A 【bracketed】 code names the route when a line starts at another road's junction."""
+    routes = {}
+    for line in _str(text).replace("臺", "台").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        bracket = re.search(r"【(台\d+[甲乙丙丁戊己庚辛]?)】", line)
+        match = bracket or _ROUTE_CODE.search(line)
+        if not match:
+            continue
+        code = match.group(1) if bracket else match.group(0)
+        segment = line.split("｜", 1)[1] if "｜" in line else re.sub(r"^[一二三四五六七八九十]+、", "", line)
+        routes[code] = (routes[code] + "；" + segment.strip()) if code in routes else segment.strip()
+    return routes
+
+
+def road_class(feed):
+    return "國道" if feed.startswith("freeway") else "省道" if feed.startswith("highway") else "縣市道路"
+
+
+def permit_match(road, feed, routes, includes_freeway=False):
+    """(route code, authorised segment text) when the event's road is on the B1 list, else ("", "")."""
+    if feed.startswith("freeway"):
+        return ("國道", "國道高速公路（超重、長度超出車尾或全高 4.2 公尺以上者禁行）") if includes_freeway else ("", "")
+    code = road_key(road)
+    return (code, routes[code]) if code in routes else ("", "")
+
+
+def parse_point(text):
+    """TDX Positions ('POINT(120.457 23.669)', or the first coordinate of other WKT) -> (lat, lon) inside Taiwan's
+    bounding box (Kinmen/Matsu included), else None."""
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)", _str(text))
+    if not match:
+        return None
+    lon, lat = float(match.group(1)), float(match.group(2))
+    if not (118.0 <= lon <= 123.0 and 21.0 <= lat <= 27.0):
+        return None
+    return round(lat, 6), round(lon, 6)

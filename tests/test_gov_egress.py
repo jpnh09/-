@@ -32,7 +32,8 @@ class TargetTests(unittest.TestCase):
         for path in (FREEWAY, "/tdx/api/basic/v1/Traffic/RoadEvent/LiveEvent/Highway",
                      "/tdx/api/basic/v1/Traffic/RoadEvent/Event/Highway",
                      "/tdx/api/basic/v1/Traffic/RoadEvent/LiveEvent/City/Taoyuan",
-                     "/tdx/api/basic/v1/Traffic/RoadEvent/Event/City/NewTaipei"):
+                     "/tdx/api/basic/v1/Traffic/RoadEvent/Event/City/NewTaipei",
+                     "/tdx/api/basic/v2/Road/Traffic/VD/Freeway"):
             source, route, upstream, pairs = self.ok(path + "?$format=JSON&$top=500&$skip=0&$count=true")
             self.assertEqual(source, "tdx")
             g.allowed_method(route, "GET", upstream)
@@ -61,7 +62,10 @@ class TargetTests(unittest.TestCase):
                        "/tdx/api/basic/v1/Traffic/RoadEvent/LiveEvent/City/Taoyuan@evil.example",
                        "/tdx/api/basic/v1/Traffic/RoadEvent/LiveEvent/City/127.0.0.1",
                        "/tdx/api/basic/v1/Traffic/RoadEvent/LiveEvent/City/NotACity",
-                       "/tdx/api/basic/v1/Traffic/RoadEvent/Event/City/Kaohsiung"):
+                       "/tdx/api/basic/v1/Traffic/RoadEvent/Event/City/Kaohsiung",
+                       "/tdx/api/basic/v2/Road/Traffic/VD/Highway",
+                       "/tdx/api/basic/v2/Road/Traffic/VD/Freeway/VD-N1-S-0.000-M-RS",
+                       "/tdx/api/basic/v2/Road/Traffic/Live/VD/Freeway"):
             with self.assertRaises(g.Refused, msg=target) as ctx:
                 _s, route, upstream, _p = g.parse_target(target)
                 g.allowed_method(route, "GET", upstream)
