@@ -278,6 +278,30 @@ class LaneFixAndPermitTests(unittest.TestCase):
                          ("國道", "省道", "縣市道路"))
 
 
+class CityScheduleTests(unittest.TestCase):
+    def test_parse_weekdays(self):
+        self.assertEqual(core.parse_weekdays(core.DEFAULT_CITY_DAYS), [0, 2, 4])
+        self.assertEqual(core.parse_weekdays("一三五"), [0, 2, 4])
+        self.assertEqual(core.parse_weekdays("週一、週三，星期五"), [0, 2, 4])
+        self.assertEqual(core.parse_weekdays("1,3,5"), [0, 2, 4])
+        self.assertEqual(core.parse_weekdays("六,日"), [5, 6])
+        self.assertEqual(core.weekdays_text([0, 2, 4]), "一,三,五")
+        for bad in ("", "  ", "Mon", "八", "0"):
+            with self.assertRaises(ValueError):
+                core.parse_weekdays(bad)
+
+    def test_city_feeds_only_mon_wed_fri_morning(self):
+        days = core.parse_weekdays(core.DEFAULT_CITY_DAYS)
+        times = core.parse_schedule(core.DEFAULT_CITY_TIMES)
+        fri, thu, sat = datetime(2026, 11, 27, 5, 30), datetime(2026, 11, 26, 5, 30), datetime(2026, 11, 28, 5, 30)
+        self.assertTrue(core.city_feeds_due(fri, days, times, scheduled=True))
+        self.assertFalse(core.city_feeds_due(fri.replace(hour=11), days, times, scheduled=True))   # other slots: no
+        self.assertFalse(core.city_feeds_due(thu, days, times, scheduled=True))
+        self.assertFalse(core.city_feeds_due(sat, days, times, scheduled=True))                     # weekend: never
+        self.assertTrue(core.city_feeds_due(datetime(2026, 11, 27, 15, 2), days, times, scheduled=False))  # manual, Friday
+        self.assertFalse(core.city_feeds_due(datetime(2026, 11, 29, 15, 2), days, times, scheduled=False))  # manual, Sunday
+
+
 class MapPointTests(unittest.TestCase):
     def test_parse_point(self):
         self.assertEqual(core.parse_point("POINT(120.457355 23.669432)"), (23.669432, 120.457355))

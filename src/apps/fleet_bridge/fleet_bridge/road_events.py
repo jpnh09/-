@@ -6,7 +6,7 @@ The worker reaches TDX only through the 政府 API 專用出口代理 (see gov_g
 import hashlib
 import time
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import frappe
 from frappe.utils import get_datetime, now_datetime
@@ -154,11 +154,6 @@ def install():
         _field("km_end", "迄點里程", "Float", hidden=1),
         _field("caution_fingerprint", "注意指紋", "Data", hidden=1),
         _field("notified_caution_fingerprint", "已通知注意指紋", "Data", hidden=1)])
-    _ensure_fields(SETTINGS, [
-        _field("permit_section", "B1 授權路線", "Section Break"),
-        _field("b1_routes", "B1 授權省道（每行一條：路線｜授權區段）", "Long Text",
-               description="預設為 B1 系統「總局授權路線」29 條省道。以整條路線比對，是否在授權區段內請依通行證核對。"),
-        _field("b1_includes_freeway", "B1 也涵蓋國道（不含超長類別）", "Check", default="0")])
     if not frappe.db.exists("DocType", LANE_TABLE):
         frappe.get_doc(dict(doctype="DocType", name=LANE_TABLE, module="Fleet Bridge", custom=1,
             autoname="field:table_key", track_changes=0, fields=[
@@ -208,7 +203,7 @@ def install():
                 _field("tdx_client_secret", "TDX Client Secret", "Password", length=255,
                        description="只存在 ERP 後端並加密保存；不會出現在車隊首頁、日誌或通知。"),
                 _field("schedule_section", "排程與範圍", "Section Break"),
-                _field("schedule_times", "每日更新時間（台北）", "Data", default=core.DEFAULT_SCHEDULE,
+                _field("schedule_times", "國道更新時間（台北）", "Data", default=core.DEFAULT_SCHEDULE,
                        description="以逗號分隔，例如 05:30,11:30,17:30,22:30。"),
                 _field("feed_freeway_live", "國道即時事件", "Check", default="1"),
                 _field("feed_highway_live", "省道即時事件", "Check", default="1"),
@@ -222,16 +217,44 @@ def install():
                        description="免費會員每月 3 點（1,500 次或 150 MB 為 1 點，合併計算）。達到上限即暫停更新；以 TDX 會員中心數字為準。"),
                 _field("manual_cooldown_minutes", "手動更新間隔（分鐘）", "Int", default="15")],
             permissions=[dict(role="System Manager", read=1, write=1)])).insert()
+    # Fields added after the first release (also on a fresh install, now that the DocType exists).
+    _ensure_fields(SETTINGS, [
+        _field("permit_section", "B1 授權路線", "Section Break"),
+        _field("b1_routes", "B1 授權省道（每行一條：路線｜授權區段）", "Long Text",
+               description="預設為 B1 系統「總局授權路線」29 條省道。以整條路線比對，是否在授權區段內請依通行證核對。"),
+        _field("b1_includes_freeway", "B1 也涵蓋國道（不含超長類別）", "Check", default="0"),
+        _field("city_schedule_section", "省道與縣市的更新頻率", "Section Break"),
+        _field("highway_times", "省道更新時間（台北）", "Data", default=core.DEFAULT_HIGHWAY_TIMES,
+               description="省道即時與預告事件只在這些時間更新，例如 05:30,19:30。國道照「國道更新時間」。"),
+        _field("city_weekdays", "縣市事件更新星期", "Data", default=core.DEFAULT_CITY_DAYS,
+               description="縣市資料不必每輪都抓，例如 一,三,五（週六日不抓）。這些日子按「手動更新」也會一併更新縣市。"),
+        _field("city_times", "縣市事件更新時間（台北）", "Data", default=core.DEFAULT_CITY_TIMES,
+               description="例如 05:30。只在上面勾選的星期執行。")])
+    _relabel(SETTINGS, "schedule_times", "國道更新時間（台北）",
+             "國道即時事件的更新時間，以逗號分隔，例如 05:30,11:30,17:30,22:30。省道、縣市各有自己的時間（見下方）。")
     # A Single DocType does not apply field defaults until someone saves the form; write them once.
     for fieldname, value in (("enabled", 0), ("schedule_times", core.DEFAULT_SCHEDULE), ("feed_freeway_live", 1),
                              ("feed_highway_live", 1), ("feed_highway_preview", 1), ("monthly_point_budget", 2.5),
                              ("manual_cooldown_minutes", 15), ("b1_routes", core.DEFAULT_B1_ROUTES),
-                             ("b1_includes_freeway", 0)):
+                             ("b1_includes_freeway", 0), ("city_weekdays", core.DEFAULT_CITY_DAYS),
+                             ("city_times", core.DEFAULT_CITY_TIMES), ("highway_times", core.DEFAULT_HIGHWAY_TIMES)):
         if not frappe.db.sql("SELECT 1 FROM `tabSingles` WHERE doctype=%s AND field=%s", (SETTINGS, fieldname)):
             frappe.db.set_single_value(SETTINGS, fieldname, value)
     from frappe.core.doctype.scheduled_job_type.scheduled_job_type import sync_jobs
     sync_jobs()
     frappe.db.commit()
+
+
+def _relabel(doctype, fieldname, label, description):
+    """Update the label/description of an existing custom field (idempotent)."""
+    if not frappe.db.exists("DocType", doctype):
+        return
+    doc = frappe.get_doc("DocType", doctype)
+    for field in doc.fields:
+        if field.fieldname == fieldname and (field.label != label or field.description != description):
+            field.label, field.description = label, description
+            doc.save()
+            return
 
 
 def _ensure_fields(doctype, fields):
@@ -258,6 +281,15 @@ def validate_settings(doc, method=None):
         if unknown:
             frappe.throw(f"不支援的縣市代碼：{', '.join(unknown)}")
         doc.set(field, ", ".join(codes))
+    try:
+        days = core.parse_weekdays(doc.get("city_weekdays") or core.DEFAULT_CITY_DAYS)
+        city_times = core.parse_schedule(doc.get("city_times") or core.DEFAULT_CITY_TIMES)
+        highway_times = core.parse_schedule(doc.get("highway_times") or core.DEFAULT_HIGHWAY_TIMES)
+    except ValueError as error:
+        frappe.throw(str(error))
+    doc.city_weekdays = core.weekdays_text(days)
+    doc.city_times = _times_text(city_times, ",")
+    doc.highway_times = _times_text(highway_times, ",")
     if not doc.monthly_point_budget or doc.monthly_point_budget <= 0:
         frappe.throw("每月估計點數上限必須大於 0。")
     if (doc.manual_cooldown_minutes or 0) < 5:
@@ -274,12 +306,67 @@ def _codes(text):
     return seen
 
 
-def _enabled_feeds(settings):
-    feeds = [key for key, field in (("freeway_live", "feed_freeway_live"), ("highway_live", "feed_highway_live"),
-                                    ("highway_preview", "feed_highway_preview")) if settings.get(field)]
-    feeds += [f"city_live:{c}" for c in _codes(settings.city_live_codes) if c in core.CITY_LIVE]
-    feeds += [f"city_preview:{c}" for c in _codes(settings.city_preview_codes) if c in core.CITY_PREVIEW]
-    return feeds
+def _city_schedule(settings):
+    """(weekdays, times) for city feeds; a broken value falls back to the defaults (Mon/Wed/Fri 05:30)."""
+    try:
+        return (core.parse_weekdays(settings.get("city_weekdays") or core.DEFAULT_CITY_DAYS),
+                core.parse_schedule(settings.get("city_times") or core.DEFAULT_CITY_TIMES))
+    except ValueError:
+        return core.parse_weekdays(core.DEFAULT_CITY_DAYS), core.parse_schedule(core.DEFAULT_CITY_TIMES)
+
+
+def _times_text(times, sep="、"):
+    return sep.join(f"{h:02d}:{m:02d}" for h, m in times)
+
+
+def _group_times(settings):
+    """(freeway times, provincial times); a broken value falls back to its default."""
+    def parse(field, default):
+        try:
+            return core.parse_schedule(settings.get(field) or default)
+        except ValueError:
+            return core.parse_schedule(default)
+    return parse("schedule_times", core.DEFAULT_SCHEDULE), parse("highway_times", core.DEFAULT_HIGHWAY_TIMES)
+
+
+def _daily_times(settings):
+    """Times when something runs every day (freeway ∪ provincial): used for 下次更新 and staleness."""
+    freeway, highway = _group_times(settings)
+    return sorted(set(freeway) | set(highway))
+
+
+def _slot_times(settings):
+    """Every scheduler slot: freeway, provincial and city times together."""
+    return sorted(set(_daily_times(settings)) | set(_city_schedule(settings)[1]))
+
+
+def _enabled_feeds(settings, when=None, scheduled=False):
+    """Feeds for a run at `when` (naive Taipei time). when=None lists every enabled feed (for the dashboard).
+    A scheduled run takes each group at its own times (國道, 省道, 縣市 on its weekdays); a manual run takes every
+    group except city feeds on their off days. Feeds not taken are left exactly as they are."""
+    freeway_times, highway_times = _group_times(settings)
+    due = lambda times: when is None or not scheduled or (when.hour, when.minute) in times
+    feeds = ["freeway_live"] if settings.get("feed_freeway_live") and due(freeway_times) else []
+    feeds += [key for key, field in (("highway_live", "feed_highway_live"), ("highway_preview", "feed_highway_preview"))
+              if settings.get(field) and due(highway_times)]
+    city = [f"city_live:{c}" for c in _codes(settings.city_live_codes) if c in core.CITY_LIVE]
+    city += [f"city_preview:{c}" for c in _codes(settings.city_preview_codes) if c in core.CITY_PREVIEW]
+    if city and when is not None:
+        days, times = _city_schedule(settings)
+        if not core.city_feeds_due(when, days, times, scheduled):
+            return feeds
+    return feeds + city
+
+
+def _run_time(run):
+    """A scheduled run counts as its slot time (a late catch-up run is still that slot); a manual run is now."""
+    key = str(getattr(run, "slot_key", None) or "")
+    if getattr(run, "run_trigger", None) == "排程" and key.startswith("排程:"):
+        try:
+            return datetime.strptime(key[3:], "%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+    return _now()
 
 
 def _secret():
@@ -800,9 +887,11 @@ def run_sync(run_name):
             _notify_budget(run)
             frappe.db.commit()
             return
-        feeds = _enabled_feeds(settings)
+        feeds = _enabled_feeds(settings, _run_time(run), getattr(run, "run_trigger", None) == "排程")
+        # city feeds that are not due this run: no fetch, no expiry, no absence check — exactly as last seen
+        held = [f for f in _enabled_feeds(settings) if f not in feeds]
         if not feeds:
-            _finish(run_name, "已略過", error="沒有啟用任何資料集。")
+            _finish(run_name, "已略過", error="這一輪沒有要更新的資料集。" if held else "沒有啟用任何資料集。")
             return
         now_str = _now_str()
         results, totals, errors, failed = [], Counter(), [], set()
@@ -835,7 +924,7 @@ def run_sync(run_name):
                 meta = {"feed": feed, "label": label, "ok": False, "error": str(error)}
                 errors.append(f"{label}：{error}")
             results.append(meta)
-        totals["ended"] += _expire_sweep(run_name, now_str, failed)
+        totals["ended"] += _expire_sweep(run_name, now_str, set(failed) | set(held))
         ok = [r for r in results if r.get("ok")]
         all_good = len(ok) == len(results) and all(r.get("complete") for r in ok)
         status = "成功" if all_good else "部分成功" if ok else "失敗"
@@ -909,12 +998,9 @@ def scheduler_tick():
     _requeue_lost()
     if not frappe.db.get_single_value(SETTINGS, "enabled"):
         return
-    try:
-        times = core.parse_schedule(frappe.db.get_single_value(SETTINGS, "schedule_times") or core.DEFAULT_SCHEDULE)
-    except ValueError:
-        return
-    slot = core.due_slot(_now(), times)
-    if not slot:
+    settings = frappe.get_single(SETTINGS)
+    slot = core.due_slot(_now(), _slot_times(settings))
+    if not slot or not _enabled_feeds(settings, slot, True):
         return
     slot_key = f"排程:{slot:%Y-%m-%d %H:%M}"
     if frappe.db.exists(RUN, {"slot_key": slot_key}):
@@ -955,10 +1041,8 @@ def road_overview():
     settings = frappe.get_single(SETTINGS)
     now = _now()
     configured = bool((settings.tdx_client_id or "").strip() and _secret())
-    try:
-        times = core.parse_schedule(settings.schedule_times or core.DEFAULT_SCHEDULE)
-    except ValueError:
-        times = core.parse_schedule(core.DEFAULT_SCHEDULE)
+    times = _daily_times(settings)
+    freeway_times, highway_times = _group_times(settings)
     runs = frappe.get_all(RUN, fields=["name", "run_trigger", "status", "started_at", "finished_at", "error", "new_count",
         "changed_count", "ended_count", "unknown_count", "major_count", "feeds_json", "creation"],
         order_by="creation desc", limit=8)
@@ -1003,8 +1087,9 @@ def road_overview():
         point = core.parse_point(row.pop("positions", None))
         row["lat"], row["lon"] = point if point else (None, None)
     return {"installed": True, "configured": configured, "enabled": bool(settings.enabled),
-            "schedule": ", ".join(f"{h:02d}:{m:02d}" for h, m in times),
+            "schedule": f"國道 {_times_text(freeway_times)}｜省道 {_times_text(highway_times)}",
             "feeds": [core.feed_spec(f)[1] for f in _enabled_feeds(settings)],
+            "city_schedule": _city_schedule_label(settings),
             "last_success_at": str(last_success.finished_at) if last_success else None,
             "last_success_run": last_success.name if last_success else None,
             "next_run_at": str(core.next_slot(now, times)) if settings.enabled else None,
@@ -1016,6 +1101,13 @@ def road_overview():
             "lane_table": _plain([frappe.db.get_value(LANE_TABLE, "freeway", ["refreshed_at", "vd_count", "point_count"],
                                                       as_dict=True) or {}])[0] if frappe.db.exists("DocType", LANE_TABLE) else {},
             "cooldown_minutes": settings.manual_cooldown_minutes or 15}
+
+
+def _city_schedule_label(settings):
+    if not (_codes(settings.city_live_codes) or _codes(settings.city_preview_codes)):
+        return ""
+    days, times = _city_schedule(settings)
+    return f"每週{core.weekdays_text(days).replace(',', '、')} " + "、".join(f"{h:02d}:{m:02d}" for h, m in times)
 
 
 @frappe.whitelist(methods=["POST"])

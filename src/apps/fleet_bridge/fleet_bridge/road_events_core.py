@@ -42,6 +42,9 @@ STATUSES = ACTIVE + ("已結束", "狀態不明")
 MAJOR_RULE = ("曳引車等同封閉：官方全封閉、特定車種管制需求、完全阻斷、災害，或國道封到最外側車道／全部車道；"
               "只封外側路肩為「通過時注意」；只封內側車道或內側路肩不影響")
 DEFAULT_SCHEDULE = "05:30,11:30,17:30,22:30"
+DEFAULT_HIGHWAY_TIMES = "05:30,19:30"   # provincial feeds: twice a day (owner, 2026-11-26)
+DEFAULT_CITY_DAYS = "一,三,五"      # city feeds: Mon/Wed/Fri only, not at the weekend (owner, 2026-11-26)
+DEFAULT_CITY_TIMES = "05:30"        # one morning run on those days, before the trucks leave
 CALL_POINTS, MB_POINTS = 1500, 150  # 基礎服務：1,500 次 = 1 點，150 MB = 1 點，合併計算
 
 
@@ -287,6 +290,41 @@ def parse_schedule(text):
     if len(times) > 24:
         raise ValueError("排程時間太多（上限 24 個）")
     return sorted(times)
+
+
+_WEEKDAY_CHARS = "一二三四五六日"
+_WEEKDAY_NUMBERS = {"1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 5, "7": 6}
+
+
+def parse_weekdays(text):
+    """'一,三,五', '一三五', '週一、週三' or '1,3,5' (Monday = 1) → sorted weekday numbers with Monday = 0.
+    Raises ValueError on anything else or when no day is given."""
+    days = set()
+    for part in (text or "").replace("，", ",").replace("、", ",").replace(" ", ",").split(","):
+        part = part.strip().replace("星期", "").replace("週", "").replace("周", "").replace("天", "日")
+        if not part:
+            continue
+        if part in _WEEKDAY_NUMBERS:
+            days.add(_WEEKDAY_NUMBERS[part])
+        elif all(ch in _WEEKDAY_CHARS for ch in part):
+            days.update(_WEEKDAY_CHARS.index(ch) for ch in part)
+        else:
+            raise ValueError(f"看不懂的星期：{part}（例如 一,三,五）")
+    if not days:
+        raise ValueError("縣市事件至少要選一天更新。")
+    return sorted(days)
+
+
+def weekdays_text(days):
+    return ",".join(_WEEKDAY_CHARS[d] for d in days)
+
+
+def city_feeds_due(when, days, times, scheduled):
+    """City feeds run only on the chosen weekdays. A scheduled run must also be one of the chosen times (its slot
+    time, so a late catch-up run still counts); a manual refresh on those days includes them at any time."""
+    if when.weekday() not in days:
+        return False
+    return not scheduled or (when.hour, when.minute) in times
 
 
 def due_slot(now, times, catch_up_minutes=180):
