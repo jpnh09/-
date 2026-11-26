@@ -102,11 +102,19 @@ def overview():
                 "plate": plate, "kind": asset_kind,
                 "status": status or "待確認", "status_known": bool(status), "version": str(native.modified),
                 "native": {"doctype": doctype, "name": native.name}, "profile": profile})
+    # Company-level administration reminders (cargo insurance, company licences, leases) have no vehicle.
+    from fleet_bridge.manual_reminders import ADMIN_KEY, ADMIN_LABEL, ADMIN_CATEGORIES
+    for item in manual.get(ADMIN_KEY, []):
+        due = item["effective_date"]
+        reminders.append({**item, "asset_id": ADMIN_KEY, "plate": ADMIN_LABEL, "admin": True,
+            "reminder_priority": "一般", "low_priority": False,
+            "days_remaining": (getdate(due) - reference).days if due else None})
     vehicles.sort(key=lambda a: a["plate"])
     reminders.sort(key=lambda r: (r["effective_date"] or "9999-12-31", r["plate"], r["record_id"]))
     due_days = [r["days_remaining"] for r in reminders if r["days_remaining"] is not None]
     return {"as_of": str(now_datetime()), "today": str(reference), "company": frappe.defaults.get_user_default("Company"),
         "assets": vehicles, "reminders": reminders,
+        "admin": {"key": ADMIN_KEY, "label": ADMIN_LABEL, "categories": list(ADMIN_CATEGORIES)},
         "counts": {"assets": len(vehicles), "kinds": dict(Counter(a["kind"] for a in vehicles)),
             "reminders": len(reminders), "past_dates": sum(d < 0 for d in due_days),
             "next_30_days": sum(0 <= d <= 30 for d in due_days),
