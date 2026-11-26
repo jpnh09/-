@@ -1,7 +1,9 @@
-# Keep operational and personal data out of the public repository
-private/
-raw-permits/
+__pycache__/
+*.pyc
+*.egg-info/
 .env
 .env.*
 *.key
 *.pem
+site_config.json
+common_site_config.json
