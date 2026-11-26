@@ -242,5 +242,52 @@ class TruckLaneTests(unittest.TestCase):
         self.assertIn("不一致", core.blocked_lanes_label("2,3", 3))
 
 
+class LaneFixAndPermitTests(unittest.TestCase):
+    def test_single_lane_main_line_detectors_ignored_and_nearest_used(self):
+        vds = [{"VDID": "VD-N1-S-7.500-M-RS", "RoadName": "國道1號", "LocationMile": "7K+500",
+                "DetectionLinks": [{"ActualLaneNum": 1, "RoadDirection": "S"}]},
+               {"VDID": "VD-N1-S-8.200-M-RS", "RoadName": "國道1號", "LocationMile": "8K+200",
+                "DetectionLinks": [{"ActualLaneNum": 3, "RoadDirection": "S"}]},
+               {"VDID": "VD-N1-S-9.400-M-RS", "RoadName": "國道1號", "LocationMile": "9K+400",
+                "DetectionLinks": [{"ActualLaneNum": 2, "RoadDirection": "S"}]}]
+        index = core.lane_index_from_vds(vds)
+        self.assertEqual(index["國道1號|S"], [[8.2, 3], [9.4, 2]])          # the 1-lane detector is gone
+        self.assertEqual(core.lanes_near(index, "國道1號", "S", 7.6, 7.6), 3)  # nearest, not the window minimum
+        self.assertEqual(core.lanes_near(index, "國道1號", "S", 8.0, 9.5), 2)  # inside the range: the fewest
+
+    def test_lane_table_stored_before_the_fix_skips_single_lane_points(self):
+        # tables built by the old code still hold 1-lane points and stay in use for LANE_REFRESH_DAYS
+        old_table = {"國道1號|S": [[7.5, 1], [8.2, 3], [9.4, 2]]}
+        self.assertEqual(core.lanes_near(old_table, "國道1號", "S", 7.6, 7.6), 3)
+        self.assertEqual(core.lanes_near(old_table, "國道1號", "S", 7.0, 8.5), 3)   # the 1-lane point inside the range is ignored
+        self.assertIsNone(core.lanes_near({"國道1號|S": [[7.5, 1]]}, "國道1號", "S", 7.6, 7.6))
+
+    def test_permit_routes(self):
+        routes = core.parse_permit_routes(core.DEFAULT_B1_ROUTES)
+        self.assertEqual(len(routes), 29)
+        self.assertIn("台74甲", routes["台1"])
+        appendix = "\n".join(["七、台3線：土城－大溪－【台3】－竹東", "三、台1線叉路口－【台1丙】－台19線叉路口",
+                              "四、台1丁線：莿桐－斗南"])
+        self.assertEqual(sorted(core.parse_permit_routes(appendix)), ["台1丁", "台1丙", "台3"])
+        self.assertEqual(core.permit_match("台3", "highway_live", routes)[0], "台3")
+        self.assertEqual(core.permit_match("臺1甲線", "highway_live", routes)[0], "台1甲")
+        self.assertEqual(core.permit_match("台61", "highway_live", routes), ("", ""))
+        self.assertEqual(core.permit_match("國道一號", "freeway_live", routes), ("", ""))
+        self.assertEqual(core.permit_match("國道一號", "freeway_live", routes, True)[0], "國道")
+        self.assertEqual((core.road_class("freeway_live"), core.road_class("highway_preview"), core.road_class("city_live:Taipei")),
+                         ("國道", "省道", "縣市道路"))
+
+
+class MapPointTests(unittest.TestCase):
+    def test_parse_point(self):
+        self.assertEqual(core.parse_point("POINT(120.457355 23.669432)"), (23.669432, 120.457355))
+        self.assertEqual(core.parse_point("POINT (121.5 25.05)"), (25.05, 121.5))
+        self.assertEqual(core.parse_point("LINESTRING(121.0 24.0, 121.1 24.1)"), (24.0, 121.0))
+        self.assertEqual(core.parse_point("POINT(118.32 24.43)"), (24.43, 118.32))   # Kinmen
+        self.assertIsNone(core.parse_point("POINT(0 0)"))
+        self.assertIsNone(core.parse_point(""))
+        self.assertIsNone(core.parse_point(None))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

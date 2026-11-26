@@ -154,6 +154,11 @@ def install():
         _field("km_end", "迄點里程", "Float", hidden=1),
         _field("caution_fingerprint", "注意指紋", "Data", hidden=1),
         _field("notified_caution_fingerprint", "已通知注意指紋", "Data", hidden=1)])
+    _ensure_fields(SETTINGS, [
+        _field("permit_section", "B1 授權路線", "Section Break"),
+        _field("b1_routes", "B1 授權省道（每行一條：路線｜授權區段）", "Long Text",
+               description="預設為 B1 系統「總局授權路線」29 條省道。以整條路線比對，是否在授權區段內請依通行證核對。"),
+        _field("b1_includes_freeway", "B1 也涵蓋國道（不含超長類別）", "Check", default="0")])
     if not frappe.db.exists("DocType", LANE_TABLE):
         frappe.get_doc(dict(doctype="DocType", name=LANE_TABLE, module="Fleet Bridge", custom=1,
             autoname="field:table_key", track_changes=0, fields=[
@@ -220,7 +225,8 @@ def install():
     # A Single DocType does not apply field defaults until someone saves the form; write them once.
     for fieldname, value in (("enabled", 0), ("schedule_times", core.DEFAULT_SCHEDULE), ("feed_freeway_live", 1),
                              ("feed_highway_live", 1), ("feed_highway_preview", 1), ("monthly_point_budget", 2.5),
-                             ("manual_cooldown_minutes", 15)):
+                             ("manual_cooldown_minutes", 15), ("b1_routes", core.DEFAULT_B1_ROUTES),
+                             ("b1_includes_freeway", 0)):
         if not frappe.db.sql("SELECT 1 FROM `tabSingles` WHERE doctype=%s AND field=%s", (SETTINGS, fieldname)):
             frappe.db.set_single_value(SETTINGS, fieldname, value)
     from frappe.core.doctype.scheduled_job_type.scheduled_job_type import sync_jobs
@@ -933,7 +939,7 @@ EVENT_FIELDS = ["name", "status", "is_major", "special_vehicle_control", "feed",
                 "source_update_time", "severity_label", "regulation_labels", "block_way_label", "blocked_lanes",
                 "impact_description", "detour_description", "reporting_source", "web_url", "first_seen_at",
                 "last_seen_at", "last_change_at", "last_change_run", "missing_since", "truck_impact",
-                "truck_impact_reason", "lane_count", "is_caution", "blocked_lanes_label"]
+                "truck_impact_reason", "lane_count", "is_caution", "blocked_lanes_label", "positions"]
 
 
 def _plain(rows):
@@ -989,6 +995,13 @@ def road_overview():
                              fields=EVENT_FIELDS, order_by="missing_since desc", limit_page_length=300)
     ended = frappe.get_all(EVENT, filters={"status": "已結束", "last_change_at": [">=", ended_since]},
                            fields=EVENT_FIELDS, order_by="last_change_at desc", limit_page_length=100)
+    routes = core.parse_permit_routes(settings.get("b1_routes") or core.DEFAULT_B1_ROUTES)
+    includes_freeway = bool(settings.get("b1_includes_freeway"))
+    for row in active + unknown + ended:
+        row["road_class"] = core.road_class(row.feed or "")
+        row["permit_route"], row["permit_segment"] = core.permit_match(row.road, row.feed or "", routes, includes_freeway)
+        point = core.parse_point(row.pop("positions", None))
+        row["lat"], row["lon"] = point if point else (None, None)
     return {"installed": True, "configured": configured, "enabled": bool(settings.enabled),
             "schedule": ", ".join(f"{h:02d}:{m:02d}" for h, m in times),
             "feeds": [core.feed_spec(f)[1] for f in _enabled_feeds(settings)],
@@ -999,6 +1012,7 @@ def road_overview():
             "latest_run": _plain([latest])[0] if latest else None,
             "runs": _plain(runs), "active": _plain(active), "unknown": _plain(unknown), "ended": _plain(ended),
             "major_rule": core.MAJOR_RULE, "notice": NOTICE, "as_of": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "b1": {"route_count": len(routes), "includes_freeway": includes_freeway},
             "lane_table": _plain([frappe.db.get_value(LANE_TABLE, "freeway", ["refreshed_at", "vd_count", "point_count"],
                                                       as_dict=True) or {}])[0] if frappe.db.exists("DocType", LANE_TABLE) else {},
             "cooldown_minutes": settings.manual_cooldown_minutes or 15}

@@ -357,7 +357,8 @@ def road_key(name):
         number = _cn_number(match.group(2))
         if number is not None:
             name = f"{match.group(1)}{number}{match.group(3)}"
-    return name.replace("臺", "台")
+    name = name.replace("臺", "台")
+    return name[:-1] if re.fullmatch(r"台\d+[甲乙丙丁戊己庚辛]?線", name) else name
 
 
 def parse_km(value):
@@ -442,7 +443,7 @@ def lane_index_from_vds(vds):
             if not isinstance(link, dict):
                 continue
             lanes, direction = _int(link.get("ActualLaneNum")), _str(link.get("RoadDirection")).upper()
-            if lanes and lanes > 0 and direction in ("N", "S", "E", "W"):
+            if lanes and lanes >= 2 and direction in ("N", "S", "E", "W"):
                 index.setdefault(f"{key_road}|{direction}", []).append([km, lanes])
     for points in index.values():
         points.sort()
@@ -450,13 +451,19 @@ def lane_index_from_vds(vds):
 
 
 def lanes_near(index, road, direction, km_start, km_end, window=LANE_WINDOW_KM):
-    """Fewest main-line lanes measured within the event's mileage range (± window). None when nothing is near.
-    Using the minimum errs towards 「封到最外側」, never towards 「沒影響」."""
+    """Main-line lanes at the event: the fewest among detectors inside the event's mileage range (errs towards
+    「封到最外側」), otherwise the nearest detector within ± window. None when nothing is near.
+    (Taking the minimum over the whole window picked narrow merge sections and over-flagged closures.)
+    1-lane points are skipped here too: a lane table stored before that fix keeps being used for 30 days."""
     if not index or not road or not direction or km_start is None:
         return None
     lo, hi = sorted((km_start, km_end if km_end is not None else km_start))
-    near = [lanes for km, lanes in index.get(f"{road}|{direction}", []) if lo - window <= km <= hi + window]
-    return min(near) if near else None
+    points = [(km, lanes) for km, lanes in index.get(f"{road}|{direction}", []) if lanes and lanes >= 2]
+    inside = [lanes for km, lanes in points if lo <= km <= hi]
+    if inside:
+        return min(inside)
+    near = sorted((min(abs(km - lo), abs(km - hi)), lanes) for km, lanes in points if lo - window <= km <= hi + window)
+    return near[0][1] if near else None
 
 
 def truck_impact(record, lane_count):
@@ -507,3 +514,80 @@ def apply_truck_impact(record, lane_index):
 
 def needs_caution_notice(status, is_caution, caution_fingerprint, notified_fingerprint):
     return status in ACTIVE and bool(is_caution) and caution_fingerprint != notified_fingerprint
+
+
+# ---------------------------------------------------------------- B1 授權路線
+# 「總局授權路線」 of the B1 (整體物臨時通行證) system: 29 provincial routes, each with segments named by places
+# (not mileage). Matching is per route; whether an event lies inside the authorised segment needs a human check.
+DEFAULT_B1_ROUTES = """台1｜新北桃園市界－桃園－新竹－通宵－沙鹿－彰化－新西螺大橋－斗南－嘉義－台南－高雄－屏東－楓港（與台74甲線叉路口人行陸橋限高4.1公尺、禁行）
+台1甲｜新北桃園市界－桃園
+台1丙｜台1線叉路口－台19線叉路口
+台1丁｜莿桐－斗南
+台2｜關渡－萬里、基隆新北市界－瑞濱－蘇澳
+台2庚｜頭城－二城
+台3｜土城（土城交流道）－大溪－竹東－珊珠湖、東勢－台中－南投－斗六－梅山－澐水、玉井－旗山－屏東
+台3乙｜員樹林－深窩
+台4｜竹圍－大坪
+台6｜龍港－苗栗
+台9｜二城－蘇澳、崇德－壽豐、池上－鹿鳴橋、知本－安朔
+台10｜西勢寮－豐原
+台13｜內湖－頭份－台10線叉路口－台3線叉路口（豐原市區）
+台14｜中庄子－草屯－埔里
+台15｜龍形－竹圍－新竹
+台16｜名間－水里
+台17｜甲南－王功－橋頭－布袋－七股－台南－高雄－水底寮
+台18｜太保－觸口橋頭
+台19｜溪湖－竹塘、自強大橋－朴子－台南
+台19甲｜鹽水－關廟
+台20｜台南－北寮
+台29｜旗山－磚子窯
+台22｜高雄－高樹
+台24｜屏東－水門
+台26｜楓港－鵝鑾鼻
+台27｜舊寮－烏龍
+台31｜台4線叉路口－台66線叉路口
+台37｜新港－太保
+台39｜新化－阿蓮"""
+_ROUTE_CODE = re.compile(r"台\d+[甲乙丙丁戊己庚辛]?")
+
+
+def parse_permit_routes(text):
+    """Lines like '台3｜土城－大溪…' or '七、台3線：土城－【台3】－…' -> {code: segment text}.
+    A 【bracketed】 code names the route when a line starts at another road's junction."""
+    routes = {}
+    for line in _str(text).replace("臺", "台").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        bracket = re.search(r"【(台\d+[甲乙丙丁戊己庚辛]?)】", line)
+        match = bracket or _ROUTE_CODE.search(line)
+        if not match:
+            continue
+        code = match.group(1) if bracket else match.group(0)
+        segment = line.split("｜", 1)[1] if "｜" in line else re.sub(r"^[一二三四五六七八九十]+、", "", line)
+        routes[code] = (routes[code] + "；" + segment.strip()) if code in routes else segment.strip()
+    return routes
+
+
+def road_class(feed):
+    return "國道" if feed.startswith("freeway") else "省道" if feed.startswith("highway") else "縣市道路"
+
+
+def permit_match(road, feed, routes, includes_freeway=False):
+    """(route code, authorised segment text) when the event's road is on the B1 list, else ("", "")."""
+    if feed.startswith("freeway"):
+        return ("國道", "國道高速公路（超重、長度超出車尾或全高 4.2 公尺以上者禁行）") if includes_freeway else ("", "")
+    code = road_key(road)
+    return (code, routes[code]) if code in routes else ("", "")
+
+
+def parse_point(text):
+    """TDX Positions ('POINT(120.457 23.669)', or the first coordinate of other WKT) -> (lat, lon) inside Taiwan's
+    bounding box (Kinmen/Matsu included), else None."""
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)", _str(text))
+    if not match:
+        return None
+    lon, lat = float(match.group(1)), float(match.group(2))
+    if not (118.0 <= lon <= 123.0 and 21.0 <= lat <= 27.0):
+        return None
+    return round(lat, 6), round(lon, 6)
