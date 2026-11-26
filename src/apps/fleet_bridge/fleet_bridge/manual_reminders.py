@@ -8,17 +8,23 @@ from fleet_bridge.reminders import validate_changes
 from fleet_bridge.vehicle_notes import _dashboard_doc
 
 DOCTYPE = "Fleet Manual Reminder"
-CATEGORIES = ("保險", "通行證", "驗車", "其他提醒")
+VEHICLE_CATEGORIES = ("保險", "通行證", "驗車", "其他提醒")
+# Company-level administration items (not tied to a vehicle) live under one fixed key.
+ADMIN_KEY = "ADMIN"
+ADMIN_LABEL = "公司行政"
+ADMIN_CATEGORIES = ("貨物險", "公司證照", "租約與車位")
+CATEGORIES = VEHICLE_CATEGORIES + ADMIN_CATEGORIES
 FIELDS = ("category", "description", "due_date", "notification_at", "notes")
 
 
-def normalize(values):
+def normalize(values, asset_id=None):
     if isinstance(values, str):
         values = json.loads(values)
     if not isinstance(values, dict) or set(values) != set(FIELDS):
         frappe.throw("提醒欄位不完整。")
     values = dict(values)
-    if values["category"] not in CATEGORIES:
+    allowed = ADMIN_CATEGORIES if asset_id == ADMIN_KEY else VEHICLE_CATEGORIES
+    if values["category"] not in allowed:
         frappe.throw("提醒類別無效。")
     for key in ("description", "notes"):
         values[key] = (values[key] or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -36,7 +42,18 @@ def _request_id(value):
     return value
 
 
+def _check_scope(asset_id):
+    """Vehicles go through the vehicle permission check; the admin scope needs System Manager."""
+    if asset_id == ADMIN_KEY:
+        if frappe.session.user == "Guest" or "System Manager" not in frappe.get_roles():
+            frappe.throw("無權修改公司行政提醒。", frappe.PermissionError)
+        return None
+    return _dashboard_doc(asset_id)
+
+
 def _plate(asset_id):
+    if asset_id == ADMIN_KEY:
+        return ADMIN_LABEL
     if asset_id.startswith(("Truck:", "Trailers:")):
         doctype, name = asset_id.split(":", 1)
         field = "license_plate" if doctype == "Truck" else "plate_number"
@@ -46,7 +63,7 @@ def _plate(asset_id):
 
 def _authorized_row(reminder_id, expected_version):
     row = frappe.get_doc(DOCTYPE, reminder_id)
-    _dashboard_doc(row.vehicle_key)
+    _check_scope(row.vehicle_key)
     row.check_permission("write")
     if get_datetime(expected_version) != get_datetime(row.modified):
         frappe.throw("VERSION_CONFLICT", frappe.TimestampMismatchError)
@@ -67,8 +84,8 @@ def _values(row):
 
 @frappe.whitelist(methods=["POST"])
 def dashboard_manual_create(asset_id, values, request_id):
-    _dashboard_doc(asset_id)
-    values, request_id = normalize(values), _request_id(request_id)
+    _check_scope(asset_id)
+    values, request_id = normalize(values, asset_id), _request_id(request_id)
     # A retried request returns the reminder it already created instead of adding a duplicate.
     existing = frappe.db.get_value(DOCTYPE, {"request_id": request_id}, "name")
     if existing:
@@ -86,7 +103,7 @@ def dashboard_manual_create(asset_id, values, request_id):
 @frappe.whitelist(methods=["POST"])
 def dashboard_manual_update(reminder_id, values, expected_version):
     row = _authorized_row(reminder_id, expected_version)
-    row.update(normalize(values))
+    row.update(normalize(values, row.vehicle_key))
     row.save()
     _notify()
     return {"reminder_id": row.name, "version": str(row.modified)}
@@ -133,6 +150,16 @@ def install():
         frappe.get_doc(dict(doctype="DocType", name=DOCTYPE, module="Fleet Bridge", custom=1,
             autoname="MR-.#####", track_changes=1, title_field="description", fields=fields,
             permissions=[dict(role="System Manager", read=1, write=1, create=1, delete=1)])).insert()
+    # Add the company-administration categories to an existing DocType (idempotent).
+    meta = frappe.get_doc("DocType", DOCTYPE)
+    for field in meta.fields:
+        if field.fieldname == "category":
+            options = [o for o in (field.options or "").split("\n") if o]
+            missing = [c for c in CATEGORIES if c not in options]
+            if missing:
+                field.options = "\n".join(options + missing)
+                meta.save()
+            break
     # Let the per-minute alert job record manual reminders beside legacy ones.
     dispatch = frappe.get_doc("DocType", "Fleet Notification Dispatch")
     changed = False
