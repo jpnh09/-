@@ -1,0 +1,5 @@
+{
+ "doctype": "Page", "name": "fleet-center", "page_name": "fleet-center",
+ "module": "Fleet Bridge", "standard": "Yes", "title": "車隊首頁",
+ "roles": [{"role": "System Manager"}]
+}
