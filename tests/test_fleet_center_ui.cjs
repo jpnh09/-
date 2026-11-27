@@ -209,6 +209,16 @@ test('limits view: import status, form, results, escaping', () => {
   assert.match(html, /class="fc-limit-red"><td>過不去/); assert.match(html, /class="fc-limit-yellow"><td>請確認/);
   assert.match(html, /限高 不明/); assert.match(html, /data-limits-map/);
   assert.ok(!html.includes('<b>台1</b>') && !html.includes('<img src=x>'));
+  ctx.l.set('limitsData', {installed: true, stale_days: 35, sources: {height: 'h', weight: 'w'}, latest: {height: null, weight: null}, permits: [
+    {name: 'P1', permit_no: '30B0001', plate: 'TRK-0001', active: 1, expired: false, checked_at: '2026-11-27 10:00', red_count: 2, yellow_count: 1, loaded_height_m: 4.2, gross_weight_t: 42, routes: '台1｜甲－乙\n台17', valid_until: '2027-05-01'},
+    {name: 'P2', permit_no: '<b>X</b>', plate: '', active: 1, expired: true, checked_at: null, red_count: 0, yellow_count: 0, routes: '台3'},
+    {name: 'P3', permit_no: '30B0003', plate: 'TRL-0002', active: 0, expired: false, checked_at: null, red_count: 0, yellow_count: 0, routes: '台1'}]});
+  ctx.l.set('limitsCheck', {permit_no: '30B0001', plate: 'TRK-0001', checked_at: '2026-11-27 10:00', routes: ['台1', '台17'], used_b1: false, red: 0, yellow: 0, conflicts: []});
+  html = ctx.l.renderRoad();
+  assert.match(html, /過不去 2<\/span>/); assert.match(html, /已過期/); assert.match(html, /未啟用/);
+  assert.match(html, /data-permit-result="P1">30B0001/); assert.match(html, /台1、台17/);
+  assert.match(html, /href="\/app\/fleet-permit-route\/P1">編輯/); assert.ok(!html.includes('<b>X</b>'));
+  assert.match(html, /通行證 30B0001（TRK-0001）｜2026-11-27 10:00 檢查｜路線 台1、台17/);
 });
 
 (async () => {

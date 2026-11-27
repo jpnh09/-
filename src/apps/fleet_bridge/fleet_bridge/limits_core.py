@@ -167,3 +167,22 @@ def route_conflicts(signs, routes, height_m=None, weight_t=None, margin_m=0.0):
                     "level": "yellow" if side or value is None else "red"})
     out.sort(key=lambda s: (s["level"] != "red", s.get("road_key") or "", s.get("km") if s.get("km") is not None else 1e9))
     return out
+
+
+def conflict_fingerprint(conflicts):
+    """Stable text for the set of red (main-line) conflicts; '' when there are none. Used so a permit is alerted
+    once per new set of problems, not on every re-check."""
+    import hashlib
+    keys = sorted(f"{c.get('kind')}|{c.get('road_key')}|{c.get('km')}|{c.get('sign_id')}|{c.get('limit_value')}"
+                  for c in conflicts or () if c.get("level") == "red")
+    return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:32] if keys else ""
+
+
+def alert_lines(conflicts, limit=5):
+    """Short lines for an alert: the first red conflicts by road and mileage."""
+    red = [c for c in conflicts or () if c.get("level") == "red"]
+    lines = [f"{c.get('road')} {c.get('km'):g}K {c.get('county', '')}{c.get('town', '')}：{c.get('reason')}"
+             if c.get("km") is not None else f"{c.get('road')} {c.get('county', '')}：{c.get('reason')}" for c in red[:limit]]
+    if len(red) > limit:
+        lines.append(f"另有 {len(red) - limit} 處")
+    return lines

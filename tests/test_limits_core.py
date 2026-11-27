@@ -104,5 +104,28 @@ class RouteConflictTests(unittest.TestCase):
         self.assertEqual(core.route_conflicts(self.signs, {"台1"}), [])
 
 
+
+class PermitAlertTests(unittest.TestCase):
+    a = {"level": "red", "kind": "height", "road_key": "台1", "road": "台1", "km": 35.511, "sign_id": "S1", "limit_value": 4.1,
+         "county": "桃園市", "town": "中壢區", "reason": "限高 4.1 m，車高 4.2 m"}
+    b = {"level": "red", "kind": "height", "road_key": "台17", "road": "台17", "km": 100.97, "sign_id": "S2", "limit_value": 3.6,
+         "county": "雲林縣", "town": "口湖鄉", "reason": "限高 3.6 m，車高 4.2 m"}
+    y = {"level": "yellow", "kind": "height", "road_key": "台1", "road": "台1", "km": 71.0, "sign_id": "S3", "limit_value": None}
+
+    def test_fingerprint(self):
+        f = core.conflict_fingerprint([self.a, self.b, self.y])
+        self.assertEqual(f, core.conflict_fingerprint([self.y, self.b, self.a]))          # order does not matter
+        self.assertEqual(f, core.conflict_fingerprint([self.a, self.b]))                  # yellow does not count
+        self.assertNotEqual(f, core.conflict_fingerprint([self.a]))
+        self.assertNotEqual(f, core.conflict_fingerprint([self.a, dict(self.b, limit_value=3.5)]))
+        self.assertEqual(core.conflict_fingerprint([self.y]), "")
+        self.assertEqual(core.conflict_fingerprint([]), "")
+
+    def test_alert_lines(self):
+        lines = core.alert_lines([self.a, self.y, self.b])
+        self.assertEqual(lines, ["台1 35.511K 桃園市中壢區：限高 4.1 m，車高 4.2 m", "台17 100.97K 雲林縣口湖鄉：限高 3.6 m，車高 4.2 m"])
+        many = [dict(self.a, km=float(i)) for i in range(8)]
+        self.assertEqual(core.alert_lines(many)[-1], "另有 3 處")
+
 if __name__ == "__main__":
     unittest.main()
