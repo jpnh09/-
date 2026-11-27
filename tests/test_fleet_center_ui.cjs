@@ -184,6 +184,33 @@ test('map: two kinds, truck-only by default, draw order, escaped popups, change 
   assert.match(html2, /曳引車等同封閉 <b>1<\/b>/); assert.match(html2, /1 筆沒有座標，請看列表/); assert.ok(!html2.includes('data-chip="mapall"'));
 });
 
+test('limits view: import status, form, results, escaping', () => {
+  const ctx = {console};
+  vm.createContext(ctx);
+  const roadSrc = pick('  const roadTime =', '  function showRoadEvent');
+  vm.runInContext(`${escSrc}
+    let roadData = null, roadFilter = 'current', roadQuery = '', roadClass = 'all', roadMode = 'limits', mapAll = false, roadLoading = false, roadError = false, roadRequesting = false, view = 'road';
+    const loadRoad = () => {};
+    ${helpers.slice(helpers.indexOf('  const chip ='), helpers.indexOf('  function reminderChips'))}
+    ${roadSrc}
+    this.l = {renderRoad, set: (k, v) => { eval(k + ' = v'); }};`, ctx);
+  ctx.l.set('limitsData', {installed: true, stale_days: 35, sources: {height: 'https://data.gov.tw/dataset/146233', weight: 'https://data.gov.tw/dataset/169930'},
+    latest: {height: {record_count: 1494, imported_at: '2026-11-26 17:00', age_days: 40, stale: true, unknown_count: 18}, weight: null}});
+  let html = ctx.l.renderRoad();
+  assert.match(html, /data-chip="roadmode" data-value="limits" aria-pressed="true"/);
+  assert.match(html, /1494 個/); assert.match(html, /超過 35 天，請下載新版/); assert.match(html, /尚未匯入/);
+  assert.match(html, /data-limits-form/); assert.match(html, /name="height" inputmode="decimal" value="4.2"/);
+  assert.ok(!html.includes('data-limits-map'));                       // no result yet → no map
+  ctx.l.set('limitsCheck', {routes: ['台1'], used_b1: false, red: 1, yellow: 1, conflicts: [
+    {level: 'red', kind: 'height', road: '台1', km: 35.511, county: '桃園市', town: '中壢區', direction: '順向', position: '右側', limit_value: 4.1, reason: '限高 4.1 m，車高 4.2 m', remark: ''},
+    {level: 'yellow', kind: 'height', road: '<b>台1</b>', km: 71.06, county: '新竹縣', town: '竹北市', direction: '順向', position: '右側', limit_value: null, reason: '限高值不明', remark: '<img src=x>'}]});
+  html = ctx.l.renderRoad();
+  assert.match(html, /過不去 1 處、請確認 1 處/);
+  assert.match(html, /class="fc-limit-red"><td>過不去/); assert.match(html, /class="fc-limit-yellow"><td>請確認/);
+  assert.match(html, /限高 不明/); assert.match(html, /data-limits-map/);
+  assert.ok(!html.includes('<b>台1</b>') && !html.includes('<img src=x>'));
+});
+
 (async () => {
   for (const [name, fn] of queue) {
     try { await fn(); passed++; console.log('PASS ' + name); }
