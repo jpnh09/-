@@ -10,6 +10,8 @@ scheduler_events = {"cron": {"* * * * *": ["fleet_bridge.notification_dispatch.r
                                              "fleet_bridge.road_events.scheduler_tick"]}}
 doc_events = {
     "Fleet Road Info Settings": {"validate": "fleet_bridge.road_events.validate_settings"},
+    "Fleet Permit Route": {"validate": "fleet_bridge.road_limits.validate_permit",
+                           "on_update": "fleet_bridge.road_limits.permit_on_update"},
     "Fleet Road Event Dispatch": {
         "before_insert": "fleet_bridge.events.guard_log_insert",
         "validate": "fleet_bridge.events.guard_log_update",
