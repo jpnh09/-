@@ -80,7 +80,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     roadFilter = ["current","truck","major","latest","unknown","ended"].includes(saved.roadFilter) ? saved.roadFilter : "current",
     roadQuery = typeof saved.roadQuery === "string" ? saved.roadQuery : "",
     roadClass = ["all","國道","省道","b1"].includes(saved.roadClass) ? saved.roadClass : "all",
-    roadMode = saved.roadMode === "map" ? "map" : "list", mapAll = saved.mapAll === true,
+    roadMode = ["map","limits"].includes(saved.roadMode) ? saved.roadMode : "list", mapAll = saved.mapAll === true,
     roadData = null, roadLoading = false, roadError = false, roadRequesting = false,
     query = typeof saved.query === "string" ? saved.query : "",
     kind = labels[saved.kind] ? saved.kind : "", period = ["all","7","30","60","90","past"].includes(saved.period) ? saved.period : "all",
@@ -103,7 +103,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     .fc-high{box-shadow:inset 0 0 0 2px #c83232;font-weight:700}.fc-low{background:#f1f3f4;color:#4f5961;border-left-color:#a5afb5}.fc-low .fc-event-title{color:#3d474f}.fc-priority{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0;padding:12px;background:var(--control-bg);border-radius:8px}.fc-priority label{margin:0}.fc-priority select{border:1px solid var(--fc-line);border-radius:7px;padding:7px 10px;background:var(--card-bg);color:inherit}.fc-priority-high{background:#fde8e8;color:#9f1d1d;font-weight:700}.fc-priority-low{background:#eceff1;color:#65727a}.fc-show-low{display:flex;gap:6px;align-items:center;margin:0}.fc-toolbar .fc-show-low input{width:auto}.fc-low-count{font-size:12px;color:var(--fc-muted)}.fc-general-note{margin:16px 0;padding:14px;border:1px solid var(--fc-line);border-radius:10px;background:var(--control-bg)}.fc-general-note-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.fc-general-note h4{margin:0}.fc-general-note p{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 0;color:var(--fc-muted)}.fc-manual-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:22px;padding-bottom:10px;border-bottom:1px solid var(--fc-line)}.fc-manual-bar h4{margin:0;font-size:15px}.fc-manual-bar small{color:var(--fc-muted)}.fc-manual{background:#e8eefb;color:#34508a}.fc-reminder-actions{display:inline-flex;gap:6px;flex-wrap:wrap}
     .fc-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-4px 0 14px}.fc-chip-btn{border:1px solid var(--fc-line);border-radius:16px;padding:5px 12px;background:var(--card-bg);color:inherit;font-size:13px;line-height:1.4}.fc-chip-btn:hover{border-color:#3c7d81}.fc-chip-btn[aria-pressed=true]{background:#246570;border-color:#246570;color:#fff}.fc-chip-label{font-size:12px;color:var(--fc-muted);margin:0 2px 0 4px}.fc-chip-sep{width:1px;align-self:stretch;background:var(--fc-line);margin:0 6px}.fc-admin-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}.fc-admin-bar p{margin:0;font-size:12px;color:var(--fc-muted)}.fc-admin-chip{background:#f6ede4;color:#7a4a24}
     .fc-bulk{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;margin-bottom:10px;border:1px solid #9cc7c4;border-radius:10px;background:#eef7f6}.fc-date-tag{display:inline-block;font-size:11px;border-radius:4px;padding:1px 6px;margin-right:4px}.fc-date-source{background:#edf1f2;color:#40545b}.fc-date-notify{background:#e8eefb;color:#34508a}.fc-muted{color:var(--fc-muted)}.fc-table td small{display:block;color:var(--fc-muted);margin-top:3px}.fc-table td small.fc-past{color:#98622d}.fc-presets{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:-6px 0 10px}.fc-shortcuts{font-size:11px;color:var(--fc-muted);margin-left:4px}
-    .fc-map{position:relative;z-index:0;height:560px;border:1px solid var(--fc-line);border-radius:12px}.fc-map.leaflet-container{background:#fff}.fc-map .leaflet-tile-pane{filter:grayscale(1);opacity:.5}.fc-pin{background:none;border:0}.fc-pin svg{display:block;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}.fc-map-legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13px;margin:4px 2px 8px}.fc-map-legend>span{display:inline-flex;align-items:center;gap:5px}.fc-map-legend small{color:var(--fc-muted)}.fc-map-popup{font-size:12px;line-height:1.6;min-width:200px;max-width:300px}.fc-map-popup .fc-pop-head{font-size:14px;font-weight:700}.fc-map-popup p{margin:2px 0}
+    .fc-map{position:relative;z-index:0;height:560px;border:1px solid var(--fc-line);border-radius:12px}.fc-map.leaflet-container{background:#fff}.fc-map .leaflet-tile-pane{filter:grayscale(1);opacity:.5}.fc-pin{background:none;border:0}.fc-pin svg{display:block;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}.fc-map-legend{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13px;margin:4px 2px 8px}.fc-map-legend>span{display:inline-flex;align-items:center;gap:5px}.fc-map-legend small{color:var(--fc-muted)}.fc-map-popup{font-size:12px;line-height:1.6;min-width:200px;max-width:300px}.fc-map-popup .fc-pop-head{font-size:14px;font-weight:700}.fc-map-popup p{margin:2px 0}.fc-limit-form{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:10px 0}.fc-limit-form label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--fc-muted);margin:0}.fc-limit-form input{width:110px;padding:5px 8px;border:1px solid var(--fc-line);border-radius:8px}.fc-limit-routes input{width:280px}.fc-limit-red td:first-child{color:#d32f2f;font-weight:700}.fc-limit-yellow td:first-child{color:#ef6c00;font-weight:700}
     .fc-group-row th{background:#f4f8f8;color:var(--fc-ink);font-size:13px;padding:8px 12px}.fc-road-b1{background:#e5f2ef;color:#28635e}
     .fc-road-status{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.fc-road-status>div{border:1px solid var(--fc-line);border-radius:12px;padding:14px 16px;background:var(--card-bg);min-width:0}.fc-road-status span{display:block;font-size:12px;color:var(--fc-muted)}.fc-road-status strong{display:block;font-size:16px;color:var(--fc-ink);margin-top:4px;overflow-wrap:anywhere}.fc-road-status small{display:block;color:var(--fc-muted);margin-top:4px;font-size:12px}.fc-road-stale{border-color:#e2b46b!important;background:#fff7e7!important}.fc-road-stale strong{color:#8a5a12}.fc-road-bad strong{color:#9f1d1d}.fc-road-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.fc-road-actions a{font-size:13px;color:#1f727a}.fc-road-major{background:#fde8e8;color:#9f1d1d;font-weight:700}.fc-road-special{background:#fff2da;color:#79551e;font-weight:700}.fc-road-new{background:#e4f2ed;color:#25664e}.fc-road-unknown{background:#eceff1;color:#4f5961}.fc-road-row td small{display:block;color:var(--fc-muted);margin-top:3px}.fc-road-desc{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;background:var(--control-bg);border-radius:8px;padding:12px;max-height:40vh;overflow:auto}
     @media(max-width:800px){.fc-road-status{grid-template-columns:repeat(2,minmax(0,1fr))}.fc-cards{grid-template-columns:repeat(2,1fr)}.fc-grid{grid-template-columns:1fr}.fc-list{max-height:300px}.fc-hero{padding:20px;align-items:flex-start}.fc-date{display:none}.fc-toolbar input{width:100%}.fc-meta{grid-template-columns:repeat(2,1fr)}.fc-detail{padding:17px}.fc-calendar-desktop{display:none}.fc-calendar-mobile{display:block}.fc-calendar-mobile .fc-event{font-size:13px;padding:8px}.fc-month-controls{flex-wrap:wrap}.fc-tabs{width:100%}.fc-tabs button{padding:9px 11px}.fc-summary-actions .btn{white-space:normal}}
@@ -411,7 +411,84 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     }
   }
   const roadSignature = d => d && d.installed ? JSON.stringify([d.active, d.unknown, d.ended].map(l => l.map(e => [e.name, e.status, e.truck_impact, e.last_change_at]))) : '';
+  // ---- 限高限重: Highway Bureau sign lists, uploaded monthly by the owner (the source site blocks programs)
+  let limitsData = null, limitsLoading = false, limitsCheck = null, limitsBusy = false, limitsMap = null;
+  const LIMIT_KEY = 'fleet-center-limit-inputs', LIMIT_DEFAULTS = {height: '4.2', weight: '', margin: '0.1', routes: ''};
+  let limitInputs = (() => { try { return {...LIMIT_DEFAULTS, ...JSON.parse(localStorage.getItem(LIMIT_KEY) || '{}')}; } catch (_) { return {...LIMIT_DEFAULTS}; } })();
+  const limitUnit = s => s.kind === 'height' ? 'm' : 't';
+  const limitLabel = s => `${s.kind === 'height' ? '限高' : '限重'} ${s.limit_value != null ? `${s.limit_value} ${limitUnit(s)}` : '不明'}`;
+  async function loadLimits() {
+    limitsLoading = true;
+    try { limitsData = (await frappe.call({method: 'fleet_bridge.road_limits.limits_overview', type: 'GET'})).message; }
+    catch (_) { limitsData = {error: true}; }
+    finally { limitsLoading = false; if (view === 'road' && roadMode === 'limits') renderResults(); }
+  }
+  async function runLimitCheck(form) {
+    limitInputs = Object.fromEntries(['height', 'weight', 'margin', 'routes'].map(k => [k, (form.elements[k].value || '').trim()]));
+    try { localStorage.setItem(LIMIT_KEY, JSON.stringify(limitInputs)); } catch (_) {}
+    limitsBusy = true; renderResults();
+    try { limitsCheck = (await frappe.call({method: 'fleet_bridge.road_limits.route_check', type: 'GET', args: limitInputs})).message; }
+    catch (_) { /* the server message is shown by frappe */ }
+    finally { limitsBusy = false; renderResults(); }
+  }
+  function importLimits() {
+    const dialog = new frappe.ui.Dialog({title: '匯入公路局限高／限重 CSV', fields: [
+      {fieldtype: 'Select', fieldname: 'kind', label: '類別', reqd: 1, default: 'height',
+       options: [{value: 'height', label: '省道車輛高度限制圖資（限高）'}, {value: 'weight', label: '省道車輛重量限制標誌（限重）'}]},
+      {fieldtype: 'HTML', fieldname: 'note', options: '<p class="text-muted small">按「選擇檔案」後上傳從公路局下載的 CSV。會整批取代同類別的舊資料；檔案看起來不對（欄位缺漏、筆數太少）會整批拒絕，現有資料不變。</p>'}],
+      primary_action_label: '選擇檔案', primary_action: values => {
+        dialog.hide();
+        new frappe.ui.FileUploader({dialog_title: '上傳公路局 CSV', allow_multiple: false, make_attachments_public: false,
+          restrictions: {allowed_file_types: ['.csv']},
+          on_success: async file => {
+            try {
+              const r = (await frappe.call({method: 'fleet_bridge.road_limits.import_limits', args: {kind: values.kind, file_url: file.file_url}})).message;
+              frappe.show_alert({message: `已匯入 ${r.records} 個${r.kind === 'height' ? '限高' : '限重'}標誌（限制值不明 ${r.unknown}、可能是側向設施 ${r.side}）`, indicator: 'green'});
+              limitsData = null; limitsCheck = null; renderResults();
+            } catch (_) { /* rejected: message shown by frappe, stored signs unchanged */ }
+          }});
+      }});
+    dialog.show();
+  }
+  function renderLimitResult() {
+    const c = limitsCheck;
+    if (!c) return '';
+    const rows = c.conflicts.map(s => `<tr class="fc-limit-${esc(s.level)}"><td>${s.level === 'red' ? '過不去' : '請確認'}</td><td>${esc(s.road)} ${s.km != null ? `${esc(s.km)}K` : ''}<small>${esc(s.county)}${esc(s.town)}｜${esc(s.direction)}｜${esc(s.position)}</small></td><td>${esc(limitLabel(s))}</td><td>${esc(s.reason)}${s.remark ? `<small>備註：${esc(s.remark)}</small>` : ''}</td></tr>`).join('');
+    return `<div class="fc-count">路線 ${esc(c.routes.join('、'))}${c.used_b1 ? '（B1 授權路線）' : ''}：過不去 ${esc(c.red)} 處、請確認 ${esc(c.yellow)} 處</div><div class="fc-map" data-limits-map role="region" aria-label="限高限重地圖"></div><div class="fc-table-wrap"><table class="fc-table"><thead><tr><th>結果</th><th>道路／位置</th><th>限制</th><th>說明</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="fc-empty">這些路線上沒有低於這個車高或總重的標誌（仍請依核定路線與現場確認）。</td></tr>'}</tbody></table></div>`;
+  }
+  function renderLimits() {
+    if (!limitsData) { if (!limitsLoading) loadLimits(); return '<div class="fc-busy" role="status">正在讀取限高限重資料…</div>'; }
+    if (limitsData.error) return '<div class="fc-empty" role="alert">無法讀取限高限重資料。<button type="button" class="btn btn-xs btn-default" data-limits-retry>重試</button></div>';
+    if (!limitsData.installed) return '<div class="fc-empty">限高限重模組尚未安裝。</div>';
+    const d = limitsData, li = limitInputs;
+    const card = k => { const x = d.latest[k];
+      return `<div class="${!x || x.stale ? 'fc-road-stale' : ''}"><span>${k === 'height' ? '限高標誌' : '限重標誌'}（公路局）</span><strong>${x ? `${esc(x.record_count)} 個` : '尚未匯入'}</strong><small>${x ? `${esc(x.imported_at)} 匯入（${esc(x.age_days)} 天前）${x.stale ? `｜超過 ${esc(d.stale_days)} 天，請下載新版` : ''}｜限制值不明 ${esc(x.unknown_count)}` : '請先用瀏覽器下載 CSV 後匯入'}</small></div>`; };
+    const form = `<form class="fc-limit-form" data-limits-form><label>裝載後車高（m）<input name="height" inputmode="decimal" value="${esc(li.height)}"></label><label>總重（t）<input name="weight" inputmode="decimal" value="${esc(li.weight)}"></label><label>安全裕度（m）<input name="margin" inputmode="decimal" value="${esc(li.margin)}"></label><label class="fc-limit-routes">路線（逗號分隔；空白＝B1 授權路線）<input name="routes" value="${esc(li.routes)}" placeholder="例如 台1, 台17, 台19"></label><button type="submit" class="btn btn-sm btn-primary" ${limitsBusy ? 'disabled' : ''}>檢查路線</button></form>`;
+    return `<div class="fc-road-status">${card('height')}${card('weight')}</div><div class="fc-road-actions"><button type="button" class="btn btn-sm btn-default" data-limits-import>匯入公路局 CSV</button><a href="${esc(d.sources.height)}" target="_blank" rel="noopener noreferrer">下載限高 CSV</a><a href="${esc(d.sources.weight)}" target="_blank" rel="noopener noreferrer">下載限重 CSV</a><small class="fc-low-count">每月更新一次；公路局網站會擋程式，請用瀏覽器下載後上傳。</small></div><div class="fc-notice">資料是公路局的標誌清單，不是實測淨高。是否在你的行駛車道上，請依通行證核定路線與現場確認；限制值不明或沒有列出的地方，都不代表可以通過。</div>${form}${renderLimitResult()}`;
+  }
+  async function mountLimitsMap() {
+    const box = content.querySelector('[data-limits-map]');
+    if (!box || !limitsCheck) return;
+    let L;
+    try { L = await loadLeaflet(); }
+    catch (_) { box.innerHTML = '<div class="fc-empty" role="alert">地圖元件無法載入；下方表格不受影響。</div>'; return; }
+    if (!box.isConnected) return;
+    if (limitsMap) { limitsMap.remove(); limitsMap = null; }
+    limitsMap = L.map(box).setView([23.75, 120.95], 8);
+    L.tileLayer(NLSC_TILES, {maxZoom: 19, attribution: '底圖：內政部國土測繪中心｜標誌：交通部公路局'}).addTo(limitsMap);
+    const pts = limitsCheck.conflicts.filter(s => typeof s.lat === 'number' && typeof s.lon === 'number');
+    for (const s of pts) {
+      const kind = s.level === 'red' ? 'closed' : 'caution', size = kind === 'closed' ? 22 : 20;
+      const label = `${limitLabel(s)}｜${s.road} ${s.km != null ? s.km + 'K' : ''}`;
+      L.marker([s.lat, s.lon], {icon: L.divIcon({className: 'fc-pin', html: pinSvg(kind, size, label), iconSize: [size, size], iconAnchor: [size / 2, size / 2]})})
+        .bindTooltip(esc(label), {direction: 'top'})
+        .bindPopup(`<div class="fc-map-popup"><div class="fc-pop-head" style="color:${MAP_COLORS[kind]}">${esc(label)}</div><p>${esc(s.county)}${esc(s.town)}｜${esc(s.direction)}｜${esc(s.position)}</p><p>${esc(s.reason)}</p>${s.remark ? `<p>備註：${esc(s.remark)}</p>` : ''}</div>`)
+        .addTo(limitsMap);
+    }
+    if (pts.length) limitsMap.fitBounds(pts.map(s => [s.lat, s.lon]), {padding: [30, 30], maxZoom: 12});
+  }
   function renderRoad() {
+    if (roadMode === 'limits') return `<div class="fc-chips" role="group" aria-label="顯示方式"><span class="fc-chip-label">顯示</span>${chip('roadmode','list','列表',false)}${chip('roadmode','map','地圖',false)}${chip('roadmode','limits','限高限重',true)}</div>${renderLimits()}`;
     if (!roadData) {
       if (!roadLoading && !roadError) loadRoad();
       return roadError ? '<div class="fc-empty" role="alert">無法讀取道路情報。<button type="button" class="btn btn-xs btn-default" data-road-retry>重試</button>（本頁未修改任何資料）</div>' : '<div class="fc-busy" role="status">正在讀取道路情報…</div>';
@@ -436,7 +513,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
       unknown:d.unknown.length, ended:d.ended.length};
     const scope = roadFilter === 'unknown' ? d.unknown : roadFilter === 'ended' ? d.ended : d.active;
     const classCounts = {all:scope.length, 國道:scope.filter(e=>e.road_class==='國道').length, 省道:scope.filter(e=>e.road_class==='省道').length, b1:scope.filter(e=>e.permit_route).length};
-    const chips = `<div class="fc-chips" role="group" aria-label="道路類別"><span class="fc-chip-label">道路</span>${Object.entries({all:'全部',國道:'國道',省道:'省道',b1:'B1 授權路線'}).map(([k,v])=>chip('roadclass',k,`${v}（${classCounts[k]}）`,roadClass===k)).join('')}</div><div class="fc-chips" role="group" aria-label="顯示方式"><span class="fc-chip-label">顯示</span>${chip('roadmode','list','列表',roadMode==='list')}${chip('roadmode','map','地圖',roadMode==='map')}</div><div class="fc-chips" role="group" aria-label="道路事件範圍"><span class="fc-chip-label">範圍</span>${Object.entries(ROAD_FILTERS).map(([k,v])=>chip('road',k,`${v}（${counts[k]}）`,roadFilter===k)).join('')}</div>`;
+    const chips = `<div class="fc-chips" role="group" aria-label="道路類別"><span class="fc-chip-label">道路</span>${Object.entries({all:'全部',國道:'國道',省道:'省道',b1:'B1 授權路線'}).map(([k,v])=>chip('roadclass',k,`${v}（${classCounts[k]}）`,roadClass===k)).join('')}</div><div class="fc-chips" role="group" aria-label="顯示方式"><span class="fc-chip-label">顯示</span>${chip('roadmode','list','列表',roadMode==='list')}${chip('roadmode','map','地圖',roadMode==='map')}${chip('roadmode','limits','限高限重',roadMode==='limits')}</div><div class="fc-chips" role="group" aria-label="道路事件範圍"><span class="fc-chip-label">範圍</span>${Object.entries(ROAD_FILTERS).map(([k,v])=>chip('road',k,`${v}（${counts[k]}）`,roadFilter===k)).join('')}</div>`;
     const b1Note = roadClass === 'b1' ? `<div class="fc-notice">B1 授權路線：${esc(d.b1?.route_count ?? 0)} 條省道${d.b1?.includes_freeway?'＋國道（不含超長類別）':''}，以整條路線比對；是否落在授權區段內請依通行證核對（滑鼠移到 B1 標籤可看區段）。台1線與台74甲線叉路口人行陸橋限高 4.1 公尺、禁行。清單可在「道路情報設定」修改。</div>` : '';
     return `${status}${actions}${chips}${b1Note}<div class="fc-notice">${esc(d.notice)}重大管制判定：${esc(d.major_rule)}。</div><div class="fc-count">${list.length} 筆 · 目前事件 ${d.active.length} · 狀態不明（近 7 日）${d.unknown.length} · 已結束（近 2 日）${d.ended.length}</div>${roadMode === 'map' ? (() => { const pts = mapPoints(list), n = k => pts.filter(p => p.kind === k).length, missing = list.length - pts.length;
       return `<div class="fc-map-legend"><span>${pinSvg('closed', 18)}曳引車等同封閉 <b>${n('closed')}</b></span><span>${pinSvg('caution', 18)}通過時注意 <b>${n('caution')}</b></span>${n('other') ? chip('mapall', '1', `顯示其他事件（${n('other')}）`, mapAll) : ''}<small>${!n('closed') && !n('caution') ? '這個條件沒有影響曳引車的事件。' : ''}${missing ? `${missing} 筆沒有座標，請看列表。` : ''}點圖示看說明。</small></div><div class="fc-map" data-road-map role="region" aria-label="道路事件地圖"></div>`; })() : `<div class="fc-table-wrap"><table class="fc-table"><thead><tr><th>狀態</th><th>道路／位置</th><th>事件</th><th>管制方式</th><th>時間（台北）</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="fc-empty">這個條件沒有道路事件。</td></tr>'}</tbody></table></div>`}`;
@@ -465,7 +542,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     let unchanged = false;
     try {
       const r = await frappe.call({method:'fleet_bridge.road_events.road_overview', type:'GET'});
-      unchanged = background && roadMode === 'map' && roadSignature(roadData) === roadSignature(r.message);
+      unchanged = background && (roadMode === 'limits' || (roadMode === 'map' && roadSignature(roadData) === roadSignature(r.message)));
       roadData = r.message; roadError = false;
     } catch (e) { if (!background || !roadData) roadError = true; }
     finally {
@@ -502,6 +579,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     if (view === "road") {
       results.innerHTML = renderRoad();
       if (roadMode === 'map' && roadData?.installed) mountRoadMap();
+      if (roadMode === 'limits' && limitsCheck) mountLimitsMap();
     } else if (view === "assets") {
       const list = filteredAssets();
       if (!list.some(a=>a.id===selected)) selected = list[0]?.id;
@@ -536,6 +614,12 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     }
     if(e.target.hasAttribute("data-show-low")){showLow=e.target.checked;renderResults();return;}if(e.target.type==='month'){if(calendar.validMonth(e.target.value)){month=e.target.value;renderResults();}else{e.target.value=month;}return;}const f=e.target.dataset.filter;if(f==='road')roadFilter=e.target.value;if(f==='kind')kind=e.target.value;if(f==='period')period=e.target.value;if(f==='category')category=e.target.value;if(f)renderResults();
   });
+  root.addEventListener("submit", e => {
+    const form = e.target.closest('[data-limits-form]');
+    if (!form) return;
+    e.preventDefault();
+    if (!limitsBusy) runLimitCheck(form);
+  });
   root.addEventListener("click", e => {
     const b=e.target.closest('button'); if(!b)return;
     if(b.dataset.chip){
@@ -552,6 +636,8 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
     if(b.hasAttribute('data-bulk-clear')){bulkSelected.clear();renderResults();return;}
     if(b.hasAttribute('data-road-retry')){roadError=false;roadData=null;renderResults();return;}
     if(b.dataset.roadEvent){showRoadEvent(b.dataset.roadEvent);return;}
+    if(b.hasAttribute('data-limits-import')){importLimits();return;}
+    if(b.hasAttribute('data-limits-retry')){limitsData=null;renderResults();return;}
     if(b.hasAttribute('data-road-refresh')){
       if(roadRequesting)return;roadRequesting=true;b.disabled=true;
       Promise.resolve(frappe.call({method:'fleet_bridge.road_events.road_refresh',type:'POST'}))
@@ -654,7 +740,7 @@ frappe.pages["fleet-center"].on_page_load = function (wrapper) {
       data=r.message; month=month||data.today.slice(0,7);
       for (const id of [...bulkSelected]) if (!data.reminders.some(x=>x.record_id===id)) bulkSelected.delete(id);
       const searchFocused = document.activeElement === content.querySelector('input[type=search]');
-      if(background && view === 'road' && roadMode === 'map') {
+      if(background && view === 'road' && (roadMode === 'map' || roadMode === 'limits')) {
         // keep the map as it is; road data refreshes on its own and redraws only when events change
       } else if(background && searchFocused) {
         renderResults();

@@ -59,6 +59,16 @@ tests/                     離線單元測試
   - 地圖元件 [Leaflet](https://leafletjs.com/) 1.9.4 由瀏覽器從 cdnjs 載入並檢查 Subresource Integrity；底圖是內政部國土測繪中心 WMTS「臺灣通用電子地圖（無等高線及門牌）」（`EMAP16`），以 CSS 轉灰階淡化。
   - 這兩者都是使用者瀏覽器直接連線，伺服器不需要額外對外連線；瀏覽器連不到時只影響地圖，列表照常。
 
+## 省道限高、限重
+
+- 資料：交通部公路局開放資料「省道車輛高度限制圖資」（[data.gov.tw 146233](https://data.gov.tw/dataset/146233)）與「省道車輛重量限制標誌」（[data.gov.tw 169930](https://data.gov.tw/dataset/169930)），政府資料開放授權條款第 1 版，每月更新。
+- 公路局下載點對程式請求回應反爬蟲驗證頁，所以不由伺服器抓取：使用者每月用瀏覽器下載 CSV（Big5），在道路情報分頁的「限高限重」上傳。整批取代同類別資料；欄位缺漏、筆數太少或超過 5% 的列無法讀取時整批拒絕，現有資料不變。資料超過 35 天未更新會提示。
+- 路線檢查：輸入裝載後車高、總重、安全裕度與路線（空白時用 B1 授權路線），列出低於車高或總重的標誌：
+  - 主線上的標誌標紅（過不去）。
+  - 備註像側向設施（機車道、涵洞、側向、迴車道、平交道等），或牌面無法判讀的標誌標橘（請確認）。
+- 這是標誌清單，不是實測淨高；限制值不明或沒有列出的地方都不代表可以通過，仍須依通行證核定路線與現場確認。
+- 測試資料 `tests/fixtures/thb_*_sample_big5.csv` 是上述開放資料的少數幾列（原始 Big5 編碼）。
+
 ## 車隊首頁（桌面）
 
 - 日期提醒：篩選條件以標籤顯示；「證件／記錄日期」與「預定通知（台北）」分欄；設定通知時間可一鍵選「到期前 30／14／7 天」（早上 08:30），並可勾選多筆一次設定或清除（逐筆經原有的稽核端點寫入，沒有日期的會先排除，結果逐筆回報）。
@@ -96,6 +106,7 @@ bench --site <site> execute fleet_bridge.road_events.install           # 道路�
 python -I tests/test_road_events_core.py
 python -I tests/test_gov_egress.py
 python -I tests/test_vehicle_access.py
+python -I tests/test_limits_core.py
 node tests/test_fleet_center_ui.cjs        # 車隊首頁的日期計算、提醒表格、批次設定、道路分組與地圖標點
 ```
 
